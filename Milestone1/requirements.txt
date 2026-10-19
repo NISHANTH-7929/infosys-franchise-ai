@@ -1,0 +1,6 @@
+streamlit>=1.30.0
+pyjwt>=2.8.0
+bcrypt>=4.1.0
+pyngrok>=7.0.0
+python-dotenv>=1.0.0
+pytest>=8.0.0
