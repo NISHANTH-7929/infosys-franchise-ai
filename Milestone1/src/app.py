@@ -420,18 +420,19 @@ if "signup_stage" not in st.session_state:
     st.session_state["signup_stage"] = "FORM"
 if "signup_email" not in st.session_state:
     st.session_state["signup_email"] = ""
+# nav_redirect: set this BEFORE the radio is rendered, it resets main_navigation_menu at start of next run
+if "nav_redirect" not in st.session_state:
+    st.session_state["nav_redirect"] = None
 
 def logout_user():
     st.session_state["jwt_token"] = None
     st.session_state["user_info"] = None
-    if "main_navigation_menu" in st.session_state:
-        st.session_state["main_navigation_menu"] = "Sign In"
+    st.session_state["nav_redirect"] = "Sign In"
     st.rerun()
 
 def logout_admin():
     st.session_state["admin_logged_in"] = False
-    if "main_navigation_menu" in st.session_state:
-        st.session_state["main_navigation_menu"] = "Sign In"
+    st.session_state["nav_redirect"] = "Sign In"
     st.rerun()
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -467,6 +468,13 @@ elif st.session_state["admin_logged_in"]:
     menu_options = ["Admin Console", "Sign In"]
 else:
     menu_options = ["Sign In", "Create Account", "Reset Password", "Administrator Portal"]
+
+# Apply any pending navigation redirect BEFORE the radio widget is rendered
+if st.session_state["nav_redirect"] is not None:
+    desired = st.session_state["nav_redirect"]
+    st.session_state["nav_redirect"] = None
+    if desired in menu_options:
+        st.session_state["main_navigation_menu"] = desired
 
 # Ensure session state for radio stays valid across auth state transitions
 if "main_navigation_menu" in st.session_state and st.session_state["main_navigation_menu"] not in menu_options:
@@ -623,7 +631,7 @@ elif selected_page == "Administrator Portal":
             if admin_submit:
                 if authenticate_admin(admin_user, admin_pass):
                     st.session_state["admin_logged_in"] = True
-                    st.session_state["main_navigation_menu"] = "Admin Console"
+                    st.session_state["nav_redirect"] = "Admin Console"
                     st.success("Administrative credentials verified.")
                     st.rerun()
                 else:
@@ -653,7 +661,7 @@ elif selected_page in ["Sign In", "User Sign In"]:
                 if success and token:
                     st.session_state["jwt_token"] = token
                     st.session_state["user_info"] = user_info
-                    st.session_state["main_navigation_menu"] = "User Dashboard"
+                    st.session_state["nav_redirect"] = "User Dashboard"
                     st.success(msg)
                     st.rerun()
                 else:
