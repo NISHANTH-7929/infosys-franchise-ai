@@ -702,7 +702,8 @@ elif selected_page == "Create Account":
                 if ok:
                     st.session_state["signup_stage"] = "OTP_VERIFY"
                     st.session_state["signup_email"] = email.strip().lower()
-                    st.success(msg)
+                    st.session_state["signup_msg"] = msg
+                    st.session_state["signup_dev_otp"] = dev_otp
                     st.rerun()
                 else:
                     st.error(msg)
@@ -722,6 +723,13 @@ elif selected_page == "Create Account":
             </div>
             """, unsafe_allow_html=True)
 
+            signup_notice = st.session_state.get("signup_msg", "")
+            if signup_notice:
+                if "[Notice:" in signup_notice or "Failed" in signup_notice or "not configured" in signup_notice:
+                    st.warning(f"{signup_notice}")
+                else:
+                    st.success("One-time verification code dispatched to your inbox.")
+
             with st.form("otp_verification_form"):
                 otp_code = st.text_input("6-Digit Verification Code", max_chars=6, placeholder="Enter the code from your inbox")
                 verify_submit = st.form_submit_button("Verify and Activate Account")
@@ -731,6 +739,7 @@ elif selected_page == "Create Account":
                     if ok:
                         st.session_state["signup_stage"] = "FORM"
                         st.session_state["signup_email"] = ""
+                        st.session_state["signup_msg"] = ""
                         st.success(msg)
                     else:
                         st.error(msg)
@@ -739,6 +748,7 @@ elif selected_page == "Create Account":
             if st.button("Back to Registration Form", key="reset_signup_btn"):
                 st.session_state["signup_stage"] = "FORM"
                 st.session_state["signup_email"] = ""
+                st.session_state["signup_msg"] = ""
                 st.rerun()
 
 # ─── VIEW: RESET PASSWORD ────────────────────────────────────────────────────

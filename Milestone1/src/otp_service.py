@@ -207,8 +207,17 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str) -> Tuple[bool, st
     Sends the OTP code via Gmail SMTP with RFC headers and dual text/HTML templates.
     If Gmail credentials are not configured, provides a descriptive message for local/demo runs.
     """
-    sender = EMAIL_ADDRESS
-    password = EMAIL_PASSWORD
+    try:
+        from src.config import get_secret
+    except ImportError:
+        try:
+            from .config import get_secret
+        except ImportError:
+            from config import get_secret
+
+    sender = get_secret("EMAIL_ADDRESS", EMAIL_ADDRESS).strip().lower()
+    raw_pass = get_secret("EMAIL_PASSWORD", EMAIL_PASSWORD)
+    password = raw_pass.replace(" ", "").replace("-", "").strip()
 
     if not sender or not password:
         return False, (
