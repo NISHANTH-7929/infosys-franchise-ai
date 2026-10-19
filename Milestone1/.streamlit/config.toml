@@ -9,3 +9,7 @@ textColor = "#0d1117"
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+enableWebsocketCompression = false
+
+[browser]
+gatherUsageStats = false

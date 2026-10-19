@@ -88,14 +88,20 @@ GLOBAL_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap');
 
 /* ─── Reset & Base ─────────────────────────────────── */
-html, body, [class*="css"], .stApp {
+html, body, .stApp {
     background-color: #f6f8fb !important;
     font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
     color: #0d1117 !important;
 }
 
-header[data-testid="stHeader"],
-.stDeployButton { display: none !important; }
+header[data-testid="stHeader"] {
+    background: transparent !important;
+}
+
+.stDeployButton,
+header[data-testid="stHeader"] [data-testid="stDecoration"] {
+    display: none !important;
+}
 
 .block-container {
     padding-top: 2rem !important;
@@ -418,10 +424,14 @@ if "signup_email" not in st.session_state:
 def logout_user():
     st.session_state["jwt_token"] = None
     st.session_state["user_info"] = None
+    if "main_navigation_menu" in st.session_state:
+        st.session_state["main_navigation_menu"] = "Sign In"
     st.rerun()
 
 def logout_admin():
     st.session_state["admin_logged_in"] = False
+    if "main_navigation_menu" in st.session_state:
+        st.session_state["main_navigation_menu"] = "Sign In"
     st.rerun()
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -458,7 +468,11 @@ elif st.session_state["admin_logged_in"]:
 else:
     menu_options = ["Sign In", "Create Account", "Reset Password", "Administrator Portal"]
 
-selected_page = st.sidebar.radio("Navigation", menu_options, label_visibility="collapsed")
+# Ensure session state for radio stays valid across auth state transitions
+if "main_navigation_menu" in st.session_state and st.session_state["main_navigation_menu"] not in menu_options:
+    st.session_state["main_navigation_menu"] = menu_options[0]
+
+selected_page = st.sidebar.radio("Navigation", menu_options, key="main_navigation_menu", label_visibility="collapsed")
 
 st.sidebar.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 st.sidebar.markdown("""
@@ -609,6 +623,7 @@ elif selected_page == "Administrator Portal":
             if admin_submit:
                 if authenticate_admin(admin_user, admin_pass):
                     st.session_state["admin_logged_in"] = True
+                    st.session_state["main_navigation_menu"] = "Admin Console"
                     st.success("Administrative credentials verified.")
                     st.rerun()
                 else:
@@ -638,6 +653,7 @@ elif selected_page in ["Sign In", "User Sign In"]:
                 if success and token:
                     st.session_state["jwt_token"] = token
                     st.session_state["user_info"] = user_info
+                    st.session_state["main_navigation_menu"] = "User Dashboard"
                     st.success(msg)
                     st.rerun()
                 else:
@@ -829,3 +845,8 @@ elif selected_page == "Reset Password":
                         del st.session_state["active_rec_email"]
                     else:
                         st.error(msg)
+else:
+    col_l, col_c, col_r = st.columns([1, 2, 1])
+    with col_c:
+        st.info("Please select an option from the sidebar to continue.")
+
