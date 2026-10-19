@@ -20,20 +20,32 @@ def get_secret(key: str, default: str = "") -> str:
     """
     Retrieve secret prioritizing Google Colab userdata, then environment variables.
     Never exposes plaintext secrets in logs or exceptions.
+    Supports common typos (e.g. \\DDRESS or ADDRESS for EMAIL_ADDRESS).
     """
+    candidates = [key]
+    if key == "EMAIL_ADDRESS":
+        candidates.extend(["\\DDRESS", "DDRESS", "ADDRESS", "EMAIL", "GMAIL_ADDRESS", "SENDER_EMAIL"])
+    elif key == "EMAIL_PASSWORD":
+        candidates.extend(["EMAIL_PASS", "GMAIL_PASSWORD", "APP_PASSWORD", "GMAIL_APP_PASSWORD"])
+
     # 1. Try Google Colab userdata
     try:
         from google.colab import userdata  # type: ignore
-        val = userdata.get(key)
-        if val is not None and str(val).strip():
-            return str(val).strip()
+        for k in candidates:
+            try:
+                val = userdata.get(k)
+                if val is not None and str(val).strip():
+                    return str(val).strip()
+            except Exception:
+                pass
     except Exception:
         pass
 
     # 2. Try OS environment variables
-    env_val = os.getenv(key)
-    if env_val is not None and env_val.strip():
-        return env_val.strip()
+    for k in candidates:
+        env_val = os.getenv(k)
+        if env_val is not None and env_val.strip():
+            return env_val.strip()
 
     return default
 
