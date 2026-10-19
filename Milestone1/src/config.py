@@ -51,8 +51,8 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 2
 
 # Gmail SMTP Configuration
-EMAIL_ADDRESS = get_secret("EMAIL_ADDRESS", "")
-EMAIL_PASSWORD = get_secret("EMAIL_PASSWORD", "")
+EMAIL_ADDRESS = get_secret("EMAIL_ADDRESS", "").strip()
+EMAIL_PASSWORD = get_secret("EMAIL_PASSWORD", "").replace(" ", "").strip()
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT_SSL = 465
 SMTP_PORT_TLS = 587
