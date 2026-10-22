@@ -420,9 +420,11 @@ if "signup_stage" not in st.session_state:
     st.session_state["signup_stage"] = "FORM"
 if "signup_email" not in st.session_state:
     st.session_state["signup_email"] = ""
-# nav_redirect: set this BEFORE the radio is rendered, it resets main_navigation_menu at start of next run
+# nav_redirect: desired page name; resolved to _nav_index before the radio renders
 if "nav_redirect" not in st.session_state:
     st.session_state["nav_redirect"] = None
+if "_nav_index" not in st.session_state:
+    st.session_state["_nav_index"] = 0
 
 def logout_user():
     st.session_state["jwt_token"] = None
@@ -474,13 +476,18 @@ if st.session_state["nav_redirect"] is not None:
     desired = st.session_state["nav_redirect"]
     st.session_state["nav_redirect"] = None
     if desired in menu_options:
-        st.session_state["main_navigation_menu"] = desired
+        st.session_state["_nav_index"] = menu_options.index(desired)
 
-# Ensure session state for radio stays valid across auth state transitions
-if "main_navigation_menu" in st.session_state and st.session_state["main_navigation_menu"] not in menu_options:
-    st.session_state["main_navigation_menu"] = menu_options[0]
+# Clamp index in case menu_options shrank after an auth state change
+if st.session_state["_nav_index"] >= len(menu_options):
+    st.session_state["_nav_index"] = 0
 
-selected_page = st.sidebar.radio("Navigation", menu_options, key="main_navigation_menu", label_visibility="collapsed")
+selected_page = st.sidebar.radio(
+    "Navigation",
+    menu_options,
+    index=st.session_state["_nav_index"],
+    label_visibility="collapsed"
+)
 
 st.sidebar.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 st.sidebar.markdown("""
