@@ -110,6 +110,89 @@ except ImportError:
             send_otp_email
         )
 
+def register_user(
+    username: str,
+    email: str,
+    password: str,
+    confirm_password: str,
+    security_question: str,
+    security_answer: str,
+    db_path: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Registers a permanent user account directly into the SQLite database.
+    No email OTP verification is required.
+    Returns: (success, message)
+    """
+    # 1. Validate mandatory fields
+    fields = {
+        "Username": username,
+        "Email": email,
+        "Password": password,
+        "Confirm Password": confirm_password,
+        "Security Question": security_question,
+        "Security Answer": security_answer
+    }
+    is_valid, msg = validate_mandatory_fields(fields)
+    if not is_valid:
+        return False, msg
+
+    # 2. Validate formats
+    is_valid, msg = validate_username(username)
+    if not is_valid:
+        return False, msg
+
+    is_valid, msg = validate_email_format(email)
+    if not is_valid:
+        return False, msg
+
+    is_valid, msg = validate_password_complexity(password)
+    if not is_valid:
+        return False, msg
+
+    is_valid, msg = validate_password_confirmation(password, confirm_password)
+    if not is_valid:
+        return False, msg
+
+    if security_question not in SECURITY_QUESTIONS:
+        return False, "Please select a valid security question from the provided list."
+
+    norm_username = username.strip()
+    norm_email = email.strip().lower()
+
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+
+    # 3. Check permanent users table for duplicate username or email
+    cursor.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (norm_username,))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Username is already registered. Please choose a different username."
+
+    cursor.execute("SELECT id FROM users WHERE email = ? COLLATE NOCASE", (norm_email,))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Email address is already registered. Please use another email or log in."
+
+    # 4. Hash credentials
+    password_hash = hash_secret(password)
+    answer_hash = hash_security_answer(security_answer)
+
+    # 5. Insert directly into users
+    now_ts = time.time()
+    created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now_ts))
+    try:
+        cursor.execute("""
+            INSERT INTO users (username, email, password_hash, security_question, security_answer_hash, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (norm_username, norm_email, password_hash, security_question, answer_hash, created_at, created_at))
+        conn.commit()
+        conn.close()
+        return True, "Account successfully registered! You can now sign in with your credentials."
+    except Exception as e:
+        conn.close()
+        return False, f"Failed to create account: {str(e)}"
+
 def stage_signup(
     username: str,
     email: str,
@@ -304,9 +387,10 @@ def login_user(
     attempt_row = cursor.fetchone()
 
     if attempt_row and attempt_row["locked_until"] and attempt_row["locked_until"] > now_ts:
-        remaining_secs = int(attempt_row["locked_until"] - now_ts)
+        remaining_secs = max(1, int(attempt_row["locked_until"] - now_ts))
+        remaining_mins = max(1, int((attempt_row["locked_until"] - now_ts + 59) // 60))
         conn.close()
-        return False, None, f"Too many failed login attempts. Account temporarily locked for {remaining_secs} seconds.", None
+        return False, None, f"Account is temporarily locked due to security violations. Please wait {remaining_secs} seconds ({remaining_mins} minute(s)) before trying again.", None
 
     # 2. Look up user by username OR email
     cursor.execute("""
@@ -372,46 +456,58 @@ def _record_failed_login(cursor, identifier: str, attempt_row, now_ts: float):
 # --- Forgot Password: Route A (Security Question) ---
 
 def get_security_question_for_user(
-    username: str,
+    identifier: str,
     db_path: Optional[str] = None
 ) -> Tuple[bool, Optional[str], str]:
     """
-    Retrieves the security question stored during signup for the given username.
+    Retrieves the security question stored during signup for the given username OR email.
+    Also checks if the account is temporarily locked out.
     """
-    norm_user = username.strip()
-    if not norm_user:
-        return False, None, "Username is required."
+    norm_id = identifier.strip()
+    if not norm_id:
+        return False, None, "Username or Email address is required."
 
     conn = get_connection(db_path)
     cursor = conn.cursor()
+    now_ts = time.time()
+
+    # Check if account is locked
+    cursor.execute("SELECT locked_until FROM login_attempts WHERE identifier = ?", (norm_id.lower(),))
+    lock_row = cursor.fetchone()
+    if lock_row and lock_row["locked_until"] and lock_row["locked_until"] > now_ts:
+        remaining_mins = max(1, int((lock_row["locked_until"] - now_ts + 59) // 60))
+        conn.close()
+        return False, None, f"Account is temporarily locked. No operations allowed for {remaining_mins} more minute(s)."
+
     cursor.execute("""
-        SELECT security_question
+        SELECT security_question, username, email
         FROM users
-        WHERE username = ? COLLATE NOCASE
-    """, (norm_user,))
+        WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE
+    """, (norm_id, norm_id))
     row = cursor.fetchone()
     conn.close()
 
     if not row:
-        return False, None, "User not found."
+        return False, None, "User not found with that username or email address."
 
     return True, row["security_question"], "Security question retrieved."
 
 def reset_password_with_security_question(
-    username: str,
+    identifier: str,
     security_answer: str,
     new_password: str,
     confirm_password: str,
     db_path: Optional[str] = None
 ) -> Tuple[bool, str]:
     """
-    Verifies user's security answer and updates password if complex and confirmed.
+    Verifies user's security answer (by username OR email) and updates password if complex and confirmed.
+    Also checks if the account is temporarily locked out.
     """
-    norm_user = username.strip()
+    norm_id = identifier.strip()
     norm_answer = security_answer.strip()
 
     fields = {
-        "Username": norm_user,
+        "Username or Email": norm_id,
         "Security Answer": norm_answer,
         "New Password": new_password,
         "Confirm Password": confirm_password
@@ -430,16 +526,34 @@ def reset_password_with_security_question(
 
     conn = get_connection(db_path)
     cursor = conn.cursor()
+    now_ts = time.time()
+
+    # Check if account is locked
+    cursor.execute("SELECT locked_until FROM login_attempts WHERE identifier = ?", (norm_id.lower(),))
+    lock_row = cursor.fetchone()
+    if lock_row and lock_row["locked_until"] and lock_row["locked_until"] > now_ts:
+        remaining_mins = max(1, int((lock_row["locked_until"] - now_ts + 59) // 60))
+        conn.close()
+        return False, f"Account is temporarily locked. No operations allowed for {remaining_mins} more minute(s)."
+
     cursor.execute("""
-        SELECT id, security_answer_hash
+        SELECT id, username, email, security_answer_hash
         FROM users
-        WHERE username = ? COLLATE NOCASE
-    """, (norm_user,))
+        WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE
+    """, (norm_id, norm_id))
     user_row = cursor.fetchone()
 
     if not user_row:
         conn.close()
         return False, "User not found."
+
+    # Also check if user's actual username or email is locked
+    cursor.execute("SELECT locked_until FROM login_attempts WHERE identifier = ? OR identifier = ?", (user_row["username"].lower(), user_row["email"].lower()))
+    user_lock = cursor.fetchone()
+    if user_lock and user_lock["locked_until"] and user_lock["locked_until"] > now_ts:
+        remaining_mins = max(1, int((user_lock["locked_until"] - now_ts + 59) // 60))
+        conn.close()
+        return False, f"Account is temporarily locked. No operations allowed for {remaining_mins} more minute(s)."
 
     stored_answer_hash = user_row["security_answer_hash"]
     if not verify_security_answer(norm_answer, stored_answer_hash):
@@ -484,7 +598,7 @@ def initiate_forgot_password_otp(
 
     otp_ok, otp_code, otp_msg = create_and_store_otp(norm_email, "FORGOT_PASSWORD", db_path)
     if not otp_ok:
-        return False, f"Failed to generate recovery OTP: {otp_msg}", None
+        return False, otp_msg, None
 
     email_ok, email_msg = send_otp_email(norm_email, otp_code, "FORGOT_PASSWORD")
 

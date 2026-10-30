@@ -61,6 +61,8 @@ except ImportError:
         from database import get_connection
         from security import hash_secret, verify_secret
 
+OTP_LOCKOUT_SECONDS = 15 * 60  # 15 minutes lockout for 3 OTP mismatches
+
 def generate_numeric_otp(digits: int = 6) -> str:
     """
     Generates a cryptographically secure numeric OTP code.
@@ -86,6 +88,14 @@ def create_and_store_otp(
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
+    # Check if this identifier is currently blocked/locked in login_attempts
+    cursor.execute("SELECT locked_until FROM login_attempts WHERE identifier = ?", (norm_id,))
+    lock_row = cursor.fetchone()
+    if lock_row and lock_row["locked_until"] and lock_row["locked_until"] > now_ts:
+        remaining_mins = max(1, int((lock_row["locked_until"] - now_ts + 59) // 60))
+        conn.close()
+        return False, "", f"Account is temporarily blocked due to 3 failed OTP attempts. No OTP requests or operations allowed for {remaining_mins} more minute(s)."
+
     # Check resend cooldown from the most recent active OTP for this identifier & purpose
     cursor.execute("""
         SELECT created_at, expires_at, is_used
@@ -96,9 +106,7 @@ def create_and_store_otp(
     recent = cursor.fetchone()
 
     if recent:
-        # Check if requested too quickly
         try:
-            # created_at is stored as timestamp string
             pass
         except Exception:
             pass
@@ -134,7 +142,8 @@ def verify_stored_otp(
 ) -> Tuple[bool, str]:
     """
     Verifies candidate OTP for the identifier and purpose.
-    Enforces expiry, max attempt limits, and single-use consumption.
+    Enforces expiry, max attempt limits, single-use consumption,
+    and locks the account for 15 minutes after 3 failed attempts.
 
     Returns: (is_valid, message)
     """
@@ -148,6 +157,14 @@ def verify_stored_otp(
 
     conn = get_connection(db_path)
     cursor = conn.cursor()
+
+    # Check if account is already locked
+    cursor.execute("SELECT locked_until FROM login_attempts WHERE identifier = ?", (norm_id,))
+    lock_row = cursor.fetchone()
+    if lock_row and lock_row["locked_until"] and lock_row["locked_until"] > now_ts:
+        remaining_mins = max(1, int((lock_row["locked_until"] - now_ts + 59) // 60))
+        conn.close()
+        return False, f"Account is temporarily blocked due to 3 failed OTP attempts. No operations allowed for {remaining_mins} more minute(s)."
 
     cursor.execute("""
         SELECT id, otp_hash, attempts, max_attempts, expires_at, is_used
@@ -192,10 +209,35 @@ def verify_stored_otp(
         new_attempts = attempts + 1
         remaining = max_attempts - new_attempts
         if remaining <= 0:
+            # 3 mismatches: Invalidate OTP and block account for 15 minutes!
+            locked_until = now_ts + OTP_LOCKOUT_SECONDS
             cursor.execute("UPDATE otp_codes SET attempts = ?, is_used = 1 WHERE id = ?", (new_attempts, record_id))
+            cursor.execute("""
+                INSERT INTO login_attempts (identifier, failed_attempts, last_failed_at, locked_until)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(identifier) DO UPDATE SET
+                    failed_attempts = excluded.failed_attempts,
+                    last_failed_at = excluded.last_failed_at,
+                    locked_until = excluded.locked_until
+            """, (norm_id, new_attempts, now_ts, locked_until))
+
+            # Also lock associated username and email from users table
+            cursor.execute("SELECT username, email FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE", (norm_id, norm_id))
+            u_rows = cursor.fetchall()
+            for u_row in u_rows:
+                for ident in [u_row["username"].lower(), u_row["email"].lower()]:
+                    cursor.execute("""
+                        INSERT INTO login_attempts (identifier, failed_attempts, last_failed_at, locked_until)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(identifier) DO UPDATE SET
+                            failed_attempts = excluded.failed_attempts,
+                            last_failed_at = excluded.last_failed_at,
+                            locked_until = excluded.locked_until
+                    """, (ident, new_attempts, now_ts, locked_until))
+
             conn.commit()
             conn.close()
-            return False, f"Incorrect OTP code. Maximum attempts ({max_attempts}) exceeded. Code is now invalidated."
+            return False, f"Incorrect OTP code. Maximum attempts ({max_attempts}) exceeded. Account is blocked for 15 minutes. No further OTP requests or operations allowed."
         else:
             cursor.execute("UPDATE otp_codes SET attempts = ? WHERE id = ?", (new_attempts, record_id))
             conn.commit()

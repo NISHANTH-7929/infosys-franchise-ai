@@ -13,6 +13,7 @@ from Milestone1.src.database import init_db, get_connection
 from Milestone1.src.config import SECURITY_QUESTIONS, ADMIN_USERNAME, ADMIN_PASSWORD
 from Milestone1.src.security import verify_jwt_token
 from Milestone1.src.auth_service import (
+    register_user,
     stage_signup,
     complete_signup,
     login_user,
@@ -220,3 +221,111 @@ def test_admin_dashboard_security_and_masking(auth_db):
         assert "password_hash" not in u
         assert "security_answer" not in u
         assert "security_answer_hash" not in u
+
+def test_direct_user_registration(auth_db):
+    username = "direct_user"
+    email = "direct@example.com"
+    password = "DirectPass@2026"
+    question = SECURITY_QUESTIONS[0]
+    answer = "Central School"
+
+    # Direct registration without OTP
+    ok, msg = register_user(
+        username=username,
+        email=email,
+        password=password,
+        confirm_password=password,
+        security_question=question,
+        security_answer=answer,
+        db_path=auth_db
+    )
+    assert ok, f"Registration failed: {msg}"
+    assert "successfully registered" in msg.lower()
+
+    # User immediately exists in users table
+    conn = get_connection(auth_db)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+    assert row is not None
+    assert row["email"] == email
+
+    # User can log in immediately
+    login_ok, token, _, user_info = login_user(username, password, db_path=auth_db)
+    assert login_ok
+    assert token is not None
+
+def test_security_question_recovery_with_username_and_email(auth_db):
+    username = "dual_rec_user"
+    email = "dual_rec@example.com"
+    password = "OriginalPassword@123"
+    question = SECURITY_QUESTIONS[1]
+    answer = "Pet Rover"
+
+    # Register
+    ok, _ = register_user(username, email, password, password, question, answer, db_path=auth_db)
+    assert ok
+
+    # Retrieve security question using USERNAME
+    ok_user, q_user, _ = get_security_question_for_user(username, db_path=auth_db)
+    assert ok_user
+    assert q_user == question
+
+    # Retrieve security question using EMAIL
+    ok_email, q_email, _ = get_security_question_for_user(email, db_path=auth_db)
+    assert ok_email
+    assert q_email == question
+
+    # Reset password using EMAIL identifier
+    new_pass = "ResetViaEmail@2026"
+    reset_ok, reset_msg = reset_password_with_security_question(
+        email, "pet rover", new_pass, new_pass, db_path=auth_db
+    )
+    assert reset_ok
+    assert "successfully reset" in reset_msg.lower()
+
+    # Can log in with new password
+    login_ok, _, _, _ = login_user(username, new_pass, db_path=auth_db)
+    assert login_ok
+
+def test_otp_lockout_across_operations(auth_db):
+    from Milestone1.src.otp_service import verify_stored_otp
+
+    username = "locked_user"
+    email = "locked@example.com"
+    password = "LockedPass@123"
+
+    ok, _ = register_user(username, email, password, password, SECURITY_QUESTIONS[0], "Ans", db_path=auth_db)
+    assert ok
+
+    # Initiate OTP
+    ok_otp, _, _ = initiate_forgot_password_otp(email, db_path=auth_db)
+    assert ok_otp
+
+    # 3 consecutive incorrect OTP entries
+    for _ in range(2):
+        v_ok, v_msg = verify_stored_otp(email, "FORGOT_PASSWORD", "000000", db_path=auth_db)
+        assert not v_ok
+        assert "remaining" in v_msg
+
+    # 3rd incorrect attempt triggers 15-minute lockout
+    v_ok, v_msg = verify_stored_otp(email, "FORGOT_PASSWORD", "000000", db_path=auth_db)
+    assert not v_ok
+    assert "blocked for 15 minutes" in v_msg.lower() or "maximum attempts" in v_msg.lower()
+
+    # 1. No new OTP can be requested
+    can_request, req_msg, _ = initiate_forgot_password_otp(email, db_path=auth_db)
+    assert not can_request
+    assert "blocked" in req_msg.lower() or "locked" in req_msg.lower()
+
+    # 2. Login is blocked for this account during lockout
+    login_ok, _, log_msg, _ = login_user(username, password, db_path=auth_db)
+    assert not login_ok
+    assert "locked" in log_msg.lower() or "blocked" in log_msg.lower()
+
+    # 3. Security question recovery is blocked during lockout
+    sq_ok, _, sq_msg = get_security_question_for_user(email, db_path=auth_db)
+    assert not sq_ok
+    assert "locked" in sq_msg.lower() or "blocked" in sq_msg.lower()
+
