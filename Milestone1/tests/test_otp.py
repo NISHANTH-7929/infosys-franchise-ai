@@ -90,10 +90,15 @@ def test_otp_attempt_limits(temp_db):
     assert not valid
     assert "Maximum attempts" in msg
 
-    # Now even the correct OTP should be rejected because code was invalidated
+    # Now even the correct OTP should be rejected because account is blocked for 15 minutes
     valid, msg = verify_stored_otp(email, "SIGNUP", real_otp, temp_db)
     assert not valid
-    assert "No active OTP request" in msg
+    assert ("blocked" in msg.lower() or "locked" in msg.lower())
+
+    # Requesting a new OTP during this 15-minute lockout period must also be rejected
+    can_request, _, req_msg = create_and_store_otp(email, "SIGNUP", temp_db)
+    assert not can_request
+    assert ("blocked" in req_msg.lower() or "locked" in req_msg.lower())
 
 def test_otp_expired(temp_db):
     email = "expired@example.com"
