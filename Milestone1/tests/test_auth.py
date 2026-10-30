@@ -10,7 +10,7 @@ import os
 import tempfile
 import pytest
 from Milestone1.src.database import init_db, get_connection
-from Milestone1.src.config import SECURITY_QUESTIONS, ADMIN_USERNAME, ADMIN_PASSWORD
+from Milestone1.src.config import SECURITY_QUESTIONS, ADMIN_USERNAME, ADMIN_PASSWORD, MAX_LOGIN_ATTEMPTS
 from Milestone1.src.security import verify_jwt_token
 from Milestone1.src.auth_service import (
     register_user,
@@ -138,12 +138,12 @@ def test_login_brute_force_lockout(auth_db):
     _, _, dev_otp = stage_signup(username, email, password, password, SECURITY_QUESTIONS[0], "Answer", db_path=auth_db)
     complete_signup(email, dev_otp, db_path=auth_db)
 
-    # 3 consecutive failed logins
-    for i in range(3):
+    # Consecutive failed logins up to the limit
+    for i in range(MAX_LOGIN_ATTEMPTS):
         ok, _, msg, _ = login_user(username, f"WrongPassword@{i}", db_path=auth_db)
         assert not ok
 
-    # 4th login attempt should report account locked
+    # The next login attempt should report account locked
     ok, _, msg, _ = login_user(username, password, db_path=auth_db)
     assert not ok
     assert "locked" in msg.lower()

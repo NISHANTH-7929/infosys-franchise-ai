@@ -77,7 +77,7 @@ MAX_OTP_ATTEMPTS = 3
 OTP_RESEND_COOLDOWN_SECONDS = 60
 
 # Rate Limiting & Lockout
-MAX_LOGIN_ATTEMPTS = 3
+MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_SECONDS = 300  # 5 minutes lockout
 
 # Admin Credentials (read from Colab Secrets / environment only; no password default)
