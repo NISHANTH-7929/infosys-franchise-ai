@@ -60,7 +60,7 @@ DEFAULT_DB_PATH = str(BASE_DIR / "milestone1.db")
 DB_PATH = get_secret("DB_PATH", DEFAULT_DB_PATH)
 
 # Authentication & JWT Configuration
-JWT_SECRET = get_secret("JWT_SECRET", "infosys-springboard-m1-educational-jwt-secret-key-2026")
+JWT_SECRET = get_secret("JWT_SECRET")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 2
 
@@ -80,9 +80,22 @@ OTP_RESEND_COOLDOWN_SECONDS = 60
 MAX_LOGIN_ATTEMPTS = 3
 LOCKOUT_SECONDS = 300  # 5 minutes lockout
 
-# Admin Credentials (For Educational & Demo Evaluation)
+# Admin Credentials (read from Colab Secrets / environment only; no password default)
 ADMIN_USERNAME = get_secret("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD", "Admin@Infosys123")
+ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD")
+ADMIN_EMAIL = get_secret("ADMIN_EMAIL", "admin@infosys.local")
+
+_missing = [name for name, val in (("JWT_SECRET", JWT_SECRET), ("ADMIN_PASSWORD", ADMIN_PASSWORD)) if not val]
+if _missing:
+    raise RuntimeError(
+        "Missing required secret(s): " + ", ".join(_missing)
+        + ". Add them in Colab Secrets (key icon, Notebook access ON) or in a .env file."
+    )
+
+# Roles (Milestone 2 builds role-based access control on these)
+ROLES = ["Admin", "Franchise Owner", "Store Manager", "Staff", "Auditor"]
+DEFAULT_ROLE = "Staff"
+ADMIN_ROLE = "Admin"
 
 # ngrok Authtoken
 NGROK_AUTHTOKEN = get_secret("NGROK_AUTHTOKEN", "")

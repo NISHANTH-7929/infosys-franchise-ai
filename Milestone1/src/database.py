@@ -8,17 +8,21 @@ Implements a single unified SQLite database for:
 4. Rate limiting and lockout counters (`login_attempts`)
 """
 
+import secrets
 import sqlite3
 import datetime
 from pathlib import Path
 from typing import Optional
 try:
-    from .config import DB_PATH
+    from .config import DB_PATH, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_EMAIL, ADMIN_ROLE, DEFAULT_ROLE
+    from .security import hash_secret
 except ImportError:
     try:
-        from src.config import DB_PATH
+        from src.config import DB_PATH, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_EMAIL, ADMIN_ROLE, DEFAULT_ROLE
+        from src.security import hash_secret
     except ImportError:
-        from config import DB_PATH
+        from config import DB_PATH, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_EMAIL, ADMIN_ROLE, DEFAULT_ROLE
+        from security import hash_secret
 
 def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     """
@@ -50,6 +54,12 @@ def init_db(db_path: Optional[str] = None) -> None:
             updated_at TEXT NOT NULL
         )
     """)
+    # Role and outlet columns (added for role-based access control); also upgrades older databases
+    existing_cols = {row["name"] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
+    if "role" not in existing_cols:
+        cursor.execute(f"ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT '{DEFAULT_ROLE}'")
+    if "outlet" not in existing_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN outlet TEXT")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
 
@@ -94,6 +104,17 @@ def init_db(db_path: Optional[str] = None) -> None:
             locked_until REAL DEFAULT 0
         )
     """)
+
+    # 5. Seed the Admin account (password comes from the ADMIN_PASSWORD secret, stored hashed)
+    cursor.execute("SELECT id FROM users WHERE username = ? COLLATE NOCASE", (ADMIN_USERNAME,))
+    if not cursor.fetchone():
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO users (username, email, password_hash, security_question, security_answer_hash,
+                               created_at, updated_at, role)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ADMIN_USERNAME, ADMIN_EMAIL.lower(), hash_secret(ADMIN_PASSWORD), "N/A",
+              hash_secret(secrets.token_urlsafe(24)), now_str, now_str, ADMIN_ROLE))
 
     conn.commit()
     conn.close()
