@@ -18,7 +18,7 @@ Highlights: one sign-in page for users and the administrator, instant account cr
    - No email OTP is needed to create an account; the record is saved immediately with salted bcrypt hashes.
 2. **Dual-Identifier Login**:
    - One sign-in page for both users and the administrator, using **Username or Email Address** and Password.
-   - 3 consecutive wrong passwords lock sign-in for 5 minutes.
+   - 5 consecutive wrong passwords lock sign-in for 5 minutes.
    - Returns generic error messages (*"Invalid username/email or password."*) to prevent user enumeration attacks.
 3. **JWT Session Management**:
    - Generates cryptographically signed **HS256 JSON Web Tokens (JWT)** upon successful authentication.
@@ -108,6 +108,8 @@ When running inside Google Colab, open the **Secrets** panel (key icon in the le
 | `ADMIN_EMAIL` | (Optional) Admin account email | Defaults to `admin@infosys.local` |
 
 > **Important:** Ensure the toggle switch for **"Notebook access"** is turned **ON** for each secret.
+>
+> **Rotate old values:** earlier versions of this repository shipped default JWT and admin-password values. Always set freshly generated secrets and never reuse those old defaults.
 
 #### 5.2. Gmail App Password Setup
 1. Visit your Google Account: [myaccount.google.com](https://myaccount.google.com/).
