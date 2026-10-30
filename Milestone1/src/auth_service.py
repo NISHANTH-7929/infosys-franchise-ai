@@ -394,7 +394,7 @@ def login_user(
 
     # 2. Look up user by username OR email
     cursor.execute("""
-        SELECT id, username, email, password_hash, created_at
+        SELECT id, username, email, password_hash, role, outlet, created_at
         FROM users
         WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE
     """, (norm_id, norm_id))
@@ -426,12 +426,15 @@ def login_user(
     user_id = user_row["id"]
     username = user_row["username"]
     email = user_row["email"]
-    token = generate_jwt_token(user_id=user_id, username=username, email=email)
+    role = user_row["role"]
+    token = generate_jwt_token(user_id=user_id, username=username, email=email, role=role)
 
     user_info = {
         "id": user_id,
         "username": username,
         "email": email,
+        "role": role,
+        "outlet": user_row["outlet"],
         "created_at": user_row["created_at"]
     }
 
@@ -683,7 +686,7 @@ def get_all_registered_users(db_path: Optional[str] = None) -> List[Dict[str, An
     conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, username, email, created_at, updated_at
+        SELECT id, username, email, role, outlet, created_at, updated_at
         FROM users
         ORDER BY id ASC
     """)
@@ -696,6 +699,8 @@ def get_all_registered_users(db_path: Optional[str] = None) -> List[Dict[str, An
             "User ID": r["id"],
             "Username": r["username"],
             "Email Address": r["email"],
+            "Role": r["role"],
+            "Outlet": r["outlet"] or "-",
             "Registration Date": r["created_at"],
             "Status": "Active"
         })

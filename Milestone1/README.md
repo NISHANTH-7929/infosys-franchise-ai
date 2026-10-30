@@ -38,9 +38,10 @@ Highlights: one sign-in page for users and the administrator, instant account cr
    - Password complexity: Minimum 8 characters, at least 1 uppercase letter, 1 lowercase letter, 1 numeric digit, and 1 special symbol.
 7. **Single SQLite Database (`milestone1.db`)**:
    - Tables: `users`, `pending_signups`, `otp_codes`, `login_attempts`.
+   - `users` carries a `role` (default `Staff`; the seeded admin is `Admin`) and an optional `outlet`, ready for Milestone 2 role-based access control. Older databases are upgraded automatically.
    - Passwords, security answers and OTP codes are stored only as salted bcrypt hashes.
 8. **Automated Test Suite**:
-   - 27 unit and integration tests covering validators, bcrypt, PyJWT, OTP limits/expiry, and complete authentication flows.
+   - 32 unit and integration tests covering validators, bcrypt, PyJWT, OTP limits/expiry, and complete authentication flows.
 
 ---
 
@@ -83,6 +84,8 @@ Milestone1/
     ├── __init__.py
     ├── test_validators.py            # Unit tests for input validation rules
     ├── test_security.py              # Unit tests for bcrypt & JWT
+    ├── conftest.py                   # Throw-away test secrets (real secrets always win)
+    ├── test_roles.py                 # Role/outlet columns, seeded admin, role in JWT
     ├── test_otp.py                   # Unit tests for OTP expiry, limits & hashing
     └── test_auth.py                  # Integration tests for auth, recovery & admin
 ```
@@ -99,9 +102,10 @@ When running inside Google Colab, open the **Secrets** panel (key icon in the le
 | `NGROK_AUTHTOKEN` | Personal authtoken from ngrok | Copy from [ngrok dashboard](https://dashboard.ngrok.com/) |
 | `EMAIL_ADDRESS` | Gmail address used as sender | `yourname@gmail.com` |
 | `EMAIL_PASSWORD` | 16-character Gmail App Password | Generated from Google Account security |
-| `JWT_SECRET` | Secret signing key for JWT tokens | Any long random string |
-| `ADMIN_USERNAME` | (Optional) Admin portal login username | Defaults to `admin` |
-| `ADMIN_PASSWORD` | (Optional) Admin portal login password | Defaults to `Admin@Infosys123` |
+| `JWT_SECRET` | **Required.** Secret signing key for JWT tokens | `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `ADMIN_PASSWORD` | **Required.** Admin account password (stored hashed in the database) | A strong password of your choice |
+| `ADMIN_USERNAME` | (Optional) Admin login username | Defaults to `admin` |
+| `ADMIN_EMAIL` | (Optional) Admin account email | Defaults to `admin@infosys.local` |
 
 > **Important:** Ensure the toggle switch for **"Notebook access"** is turned **ON** for each secret.
 
@@ -127,9 +131,9 @@ When running inside Google Colab, open the **Secrets** panel (key icon in the le
 3. Configure the secrets in the left sidebar as described in Section 5.1.
 4. Run all cells sequentially (**Runtime -> Run all**):
    - Cell 1: Installs required packages (`streamlit`, `pyjwt`, `bcrypt`, `pyngrok`).
-   - Cell 2: Validates configured Colab secrets.
+   - Cell 2: Validates configured Colab secrets (`JWT_SECRET` and `ADMIN_PASSWORD` are required; the app stops with a clear message if they are missing).
    - Cell 3: Scaffolds source code files into `src/` and `tests/`.
-   - Cell 4: Runs the complete automated test suite (`pytest tests -v`).
+   - Cell 4: Runs the complete automated test suite (`pytest tests -v`) with throw-away test secrets.
    - Cell 5: Starts the Streamlit application and outputs a live **ngrok Public URL**.
 5. Click the generated public URL to access the live portal.
 
@@ -147,7 +151,7 @@ When running inside Google Colab, open the **Secrets** panel (key icon in the le
    EMAIL_PASSWORD=your_16_char_app_password
    JWT_SECRET=your_jwt_secret_key
    ADMIN_USERNAME=admin
-   ADMIN_PASSWORD=Admin@Infosys123
+   ADMIN_PASSWORD=choose_a_strong_admin_password
    ```
 
 3. **Run Automated Test Suite:**
@@ -174,9 +178,10 @@ python -m pytest Milestone1/tests -v
 | `test_validators.py` | 7 | Mandatory fields, email rule, password complexity, username format |
 | `test_security.py` | 5 | bcrypt hashing, JWT creation and verification |
 | `test_otp.py` | 6 | OTP format, hashing, expiry, attempt limits, 15-minute lockout |
+| `test_roles.py` | 5 | Seeded Admin, default role, role in JWT, DB upgrade, no hashes in directory |
 | `test_auth.py` | 9 | Registration, login, both recovery routes, admin masking |
 
-Result: **27 passed**.
+Result: **32 passed**.
 
 ---
 

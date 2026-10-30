@@ -55,7 +55,8 @@ def verify_security_answer(candidate_answer: str, stored_hash: str) -> bool:
     normalized = candidate_answer.strip().lower()
     return verify_secret(normalized, stored_hash)
 
-def generate_jwt_token(user_id: int, username: str, email: str, expiry_hours: int = JWT_EXPIRATION_HOURS) -> str:
+def generate_jwt_token(user_id: int, username: str, email: str, expiry_hours: int = JWT_EXPIRATION_HOURS,
+                       role: str = "Staff") -> str:
     """
     Generates a cryptographically signed JWT token upon successful user authentication.
     """
@@ -66,6 +67,7 @@ def generate_jwt_token(user_id: int, username: str, email: str, expiry_hours: in
         "sub": str(user_id),
         "username": username,
         "email": email,
+        "role": role,
         "iat": int(now.timestamp()),
         "exp": int(expiration.timestamp()),
         "iss": "infosys-springboard-auth"
