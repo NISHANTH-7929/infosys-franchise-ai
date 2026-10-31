@@ -53,9 +53,11 @@ def detail(c, e):
     if bd: bl.append(B.card("Why: score from each agent", B.chart(B.bar(list(bd), list(bd.values()), horizontal=True, max_=100, itemcolors=[color_h(v) for v in bd.values()]), h=200, key="d_bd"), sub="weights: outlet 30% · inventory 20% · staff 20% · marketing 15% · audit 15%"))
     if len(s): bl.append(B.card("Live sales stream", B.chart(B.line(s.t, s.amount, colors=[TEAL]), h=170, key="d_s")))
     bl.append(B.table(lo, ["sku_name", "stock", "wk", "lead"], title="Lowest-cover SKUs", h=190, key="d_lo"))
-    try:
-        import alts; bl += alts.outlet_alternatives(e)
-    except Exception as ex: bl.append(B.callout(f"Transfer suggestions unavailable: {ex}", "info"))
+    if c.get("scope"): bl.append(B.callout("Stock-transfer suggestions compare you with other outlets, so they are only shown to roles that see the whole chain.", "info"))
+    else:
+        try:
+            import alts; bl += alts.outlet_alternatives(e)
+        except Exception as ex: bl.append(B.callout(f"Transfer suggestions unavailable: {ex}", "info"))
     bl.append(ticket_block(c, target=e, title=f"Tickets for {e}", key="d_tk"))
     if can(c, "run"): bl.append(B.button("rerun", "Re-run all agents now", "/api/run_cycle", "ghost"))
     return {"title": f"{e} · {r.outlet_name}", "sub": r.location, "blocks": bl}
@@ -103,7 +105,7 @@ def inventory(c, tab=None):
     bl.append(B.row(B.card("Stock cover (days)", B.chart(B.hist(d.cover_days, 28, BLUE), h=270, key="iv_h")), B.card("% of SKUs short, by category", B.chart(B.bar(cat.index, cat.values, colors=[AMBER], pct=True), h=270, key="iv_c"))))
     bl.append(B.row(B.card("Most urgent SKUs", B.table(d[d.short].sort_values("cover_days").head(15)[["outlet_id", "sku_name", "current_stock", "cover_days", "lead", "risk"]], ["outlet_id", "sku_name", "current_stock", B.num_col("cover_days", "cover days", "num"), "lead", B.num_col("risk", "stock-out risk", "pct")], h=290, open={"col": "outlet_id"}, key="iv_u")),
                     B.card("Purchase orders created by this agent (they deliver into stock, closing the loop)", B.table(po.head(20), ["po_id", "outlet_id", "sku_name", "qty", B.pill_col("status"), "eta_ts"], h=290, open={"col": "outlet_id"}, key="iv_p"))))
-    outs = sorted(d.outlet_id.unique()); sel = (c.get("params") or {}).get("o") or (outs[0] if outs else None); meth = (c.get("params") or {}).get("m") or "Prophet (if installed)"
+    outs = sorted(d.outlet_id.unique()); sel = (c.get("params") or {}).get("o") or (outs[0] if outs else None); sel = sel if sel in outs else (outs[0] if outs else None); meth = (c.get("params") or {}).get("m") or "Prophet (if installed)"
     bl.append({"t": "form", "id": "inv_fc", "fields": [{"name": "o", "label": "Demand forecast for outlet", "type": "select", "options": outs, "value": sel}, {"name": "m", "label": "Method", "type": "select", "options": ["Prophet (if installed)", "Trend x weekday"], "value": meth}], "submit": "Forecast", "url": "page:inventory", "title": None, "tone": "ghost", "inline": True})
     if sel:
         h, f, how = dom.forecast_series(sel, 14, "trend" if meth.startswith("Trend") else None)
@@ -119,7 +121,7 @@ def marketing(c, tab=None):
     ch = m.groupby("channel").actual_roi.mean().sub(1).mul(100).round(0).sort_values(); seg = r.get("segments", {})
     bl.append(B.row(B.card("Average ROI % by channel", B.chart(B.bar(ch.index, ch.values, horizontal=True, colors=[TEAL], pct=True), h=270, key="mk_c")), B.card("Customer segments (KMeans k=3)", B.chart(B.pie(seg), h=270, key="mk_s")) if seg else B.callout("Segments appear after the first agent run.", "info")))
     bl.append(B.table(m[m.status == "live"].sort_values("roi_pct")[["outlet_id", "campaign_name", "channel", "budget", "roi_pct", "end_date"]].head(30), ["outlet_id", "campaign_name", "channel", B.num_col("budget", "budget", "money"), B.num_col("roi_pct", "ROI %", "num"), "end_date"], title="Live campaigns (lowest ROI first)", h=300, open={"col": "outlet_id"}, key="mk_l"))
-    paused = Q("SELECT target, detail, ts FROM agent_actions WHERE type='pause_promo' ORDER BY action_id DESC LIMIT 8")
+    paused = scoped(Q("SELECT target, detail, ts FROM agent_actions WHERE type='pause_promo' ORDER BY action_id DESC LIMIT 8"), c)
     if len(paused): bl.append(B.table(paused, ["target", "detail", "ts"], title="Promotions paused by the cross-agent rule (stock shortage + live campaign)", h=220, open={"col": "target"}, key="mk_p"))
     x = cross(c, m[m.status == "live"].outlet_id.unique(), "marketing"); bl += [x] if x else []
     bl.append(ticket_block(c, "marketing", title="Open tickets from this agent", key="tk_mk")); return B.page("Marketing", "Agent 4 · ROI, segments, campaign control", bl, live=12)
@@ -127,9 +129,9 @@ def marketing(c, tab=None):
 def sentiment(c, tab=None):
     w, p = _sc(c); f = Q("SELECT outlet_id, rating, comment, date, sentiment_score s FROM feedback" + w + " ORDER BY rowid DESC LIMIT 4000", p); r = (latest("feedback") or {}).get("out", {})
     bl = [hero(c, "feedback", "Sentiment agent", "VADER + star rating on every review, with issue categories. A review submitted here is analysed at once and picked up by the next agent cycle."),
-          B.kpis(("Reviews analysed", len(f)), ("Avg rating", f"{f.rating.mean():.2f}" if len(f) else "n/a"), ("Outlets scoring < 45", sum(v < 45 for v in r.get("per_outlet", {}).values()), None, "Warning"))]
+          B.kpis(("Reviews analysed", len(f)), ("Avg rating", f"{f.rating.mean():.2f}" if len(f) else "n/a"), ("Outlets scoring < 45", sum(v < 45 for k, v in r.get("per_outlet", {}).items() if not c.get("scope") or k == c["scope"]), None, "Warning"))]
     iss = pd.Series(r.get("issues", {})).sort_values(); rd = f.rating.value_counts().sort_index()
-    bl.append(B.row(B.card("Issue categories in reviews", B.chart(B.bar(iss.index, iss.values, horizontal=True, colors=[AMBER]), h=270, key="se_i")) if len(iss) else B.callout("Issue categories appear after the first run.", "info"), B.card("Rating distribution", B.chart(B.bar(rd.index.astype(int).astype(str), rd.values.astype(int), colors=[TEAL]), h=270, key="se_r"))))
+    bl.append(B.row(B.callout("Issue categories are counted across the whole chain, so they are not shown for an outlet role.", "info") if c.get("scope") else B.card("Issue categories in reviews", B.chart(B.bar(iss.index, iss.values, horizontal=True, colors=[AMBER]), h=270, key="se_i")) if len(iss) else B.callout("Issue categories appear after the first run.", "info"), B.card("Rating distribution", B.chart(B.bar(rd.index.astype(int).astype(str), rd.values.astype(int), colors=[TEAL]), h=270, key="se_r"))))
     per = pd.Series(r.get("per_outlet", {})); per = per[per.index == c["scope"]] if c.get("scope") else per.sort_values().head(10)
     if len(per): bl.append(B.table(per.rename("score").reset_index().rename(columns={"index": "outlet"}), ["outlet", B.num_col("score", "score", "bar", 100)], title="Lowest sentiment scores (0-100)", h=250, open={"col": "outlet"}, key="se_l"))
     bl.append(B.table(f.head(14)[["outlet_id", "rating", "comment", "date"]], ["outlet_id", "rating", "comment", "date"], title="Latest reviews", h=300, open={"col": "outlet_id"}, key="se_t"))

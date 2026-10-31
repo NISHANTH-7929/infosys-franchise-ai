@@ -187,6 +187,7 @@ def answer(kind, q, scope=None, mask=False):
         j = f" JOIN outlets o ON o.outlet_id={t}.outlet_id"; gq = f"o.{gcol}"
     elif gcol in cs: j, gq = "", gcol
     else: j, gq = "", None
+    if mask and t == "staff" and (metric in ("salary", "age") or re.search(r"\b(salary|salaries|pay|wage|age)\b", ql)): return {"answer": "Salary and personal details are visible to the Admin, Franchise Owner and Store Manager roles only.", "sql": "", "df": None}     # RBAC: checked before every aggregation, not only for lists
     if gq:
         fn = {"count": "COUNT(*)", "avg": f"AVG({metric})", "sum": f"SUM({metric})"}.get(agg, f"AVG({metric})" if metric else "COUNT(*)")
         if agg == "rank" and re.search(r"\b(lowest|least|smallest|minimum|min|bottom|worst|fewest|weakest|poorest|cheapest)\b", ql) and not re.search(r"\b(worst|riskiest)\b", ql) or (re.search(r"\b(worst)\b", ql) and metric not in BAD): order_dir = "ASC"

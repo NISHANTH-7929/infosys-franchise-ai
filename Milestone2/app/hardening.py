@@ -64,7 +64,7 @@ def install(app, kind="app"):
         if tok and request.query_params.get("token") != tok: return PlainTextResponse("forbidden", status_code=403)
         if not tok:
             try:
-                u = {"role": "Admin"}
+                u = request.app.state.user_of(request)          # server.py registers its user_of here; no registered user_of means forbidden
                 if not u or u.get("role") != "Admin": return PlainTextResponse("forbidden", status_code=403)
             except Exception: return PlainTextResponse("forbidden", status_code=403)
         L = ["# TYPE app_requests_total counter"] + [f'app_requests_total{{route="{k}"}} {v}' for k, v in M["requests"].items()] + ["# TYPE app_responses_total counter"] + [f'app_responses_total{{class="{k}xx"}} {v}' for k, v in M["status"].items()]

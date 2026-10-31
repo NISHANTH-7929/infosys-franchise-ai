@@ -3,9 +3,10 @@ import json, datetime
 import numpy as np, pandas as pd
 import live_engine as LE, entities as EN
 import blocks as B
+import rbac
 from blocks import Q, clean, L, TEAL, BLUE, AMBER, RED, VIOLET, TONE
 
-def can(c, cap): return True      # one operator, no roles in this version
+def can(c, cap): return cap in rbac.caps_of(c["role"])      # same table as need(): a button or form is only drawn for a role that may use it
 def latest(agent):
     r = LE.conn().execute("SELECT ts,score,risk,latency_ms,summary,output,cycle_id FROM agent_runs WHERE agent=? ORDER BY run_id DESC LIMIT 1", (agent,)).fetchone()
     if not r: return None
@@ -19,7 +20,7 @@ def decision():
     except Exception: ev = {}
     return {"id": int(d.decision_id[0]), "ts": d.ts[0], "score": float(d.score[0]), "risk": d.risk[0], "narrative": d.narrative[0], "ev": ev}
 def scoped(df, c, col="target"):
-    return df[df[col].astype(str).str.startswith(c["scope"])] if c.get("scope") and len(df) else df
+    return df[df[col].astype(str) == c["scope"]] if c.get("scope") and len(df) else df
 
 # ------------------------------------------------------------------ tickets
 def tk_df(c, agent=None, types=None, target=None, statuses=("open", "proposed"), limit=300):
@@ -34,7 +35,10 @@ def ticket_block(c, agent=None, types=None, title="Open tickets", target=None, k
     df = tk_df(c, agent, types, target, limit=limit)
     if not len(df): return B.callout("Nothing raised right now.", "info", title)
     return B.table(df, ["id", "ts", B.pill_col("severity"), "type", "target", "detail"], title=title, h=300, key=key or f"tk_{agent or target or 'all'}", open={"col": "target"} if False else None)
-def hero(c, agent, title, blurb): return B.hero(agent, title, blurb, latest(agent), can_run=can(c, "run"))
+def hero(c, agent, title, blurb):
+    r = latest(agent)
+    if c.get("scope") and r: r = {**r, "score": None, "risk": None, "summary": None}      # the agent's score and summary are chain-wide and name other outlets
+    return B.hero(agent, title, blurb, r, can_run=can(c, "run"))
 def cross(c, targets, own, title="Flagged by other agents for these entities"):
     t = [str(x) for x in list(dict.fromkeys(targets))][:60]
     if not t: return None
