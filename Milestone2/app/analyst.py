@@ -79,12 +79,14 @@ def outlets_in_place(ql, scope=None):
     if not pl: return None
     kind, name = pl; o = Q("SELECT outlet_id, outlet_name name, location, tier, revenue, customer_satisfaction csat, staff_headcount staff FROM outlets")
     o["state"] = o.location.map(CITY_STATE).fillna("Other"); d = o[o.state == name] if kind == "state" else o[o.location == name]
+    if scope: d = d[d.outlet_id == scope]           # RBAC: a scoped role only sees its own outlet
     if not len(d): return {"answer": f"No outlets found in {name}.", "df": None, "sql": "outlets filtered by place"}
     by = d.groupby("location").size().sort_values(ascending=False); txt = ", ".join(f"{k} {v}" for k, v in by.items())
     return {"answer": f"**{len(d)}** outlets in {name}" + (f": {txt}." if kind == "state" else "."), "df": d.drop(columns=["state"]).sort_values(["location", "outlet_id"]), "sql": f"outlets where {'state (from city)' if kind == 'state' else 'location'} = {name}"}
 def staff_by_place(ql, scope=None):
     s = Q("SELECT s.staff_id, s.outlet_id, o.location FROM staff s LEFT JOIN outlets o USING(outlet_id)")
     if not len(s): return None
+    if scope: s = s[s.outlet_id == scope]           # RBAC: a scoped role only sees its own outlet
     s["state"] = s.location.map(CITY_STATE).fillna("Other"); pl = _place(ql)
     if pl:
         kind, name = pl; d = s[s.state == name] if kind == "state" else s[s.location == name]; g = d.groupby("location").size().sort_values(ascending=False).reset_index(name="employees")
@@ -198,7 +200,7 @@ def _answer(kind, q, scope=None, dec=None, dom=None):
             _pl = (bool(re.search(r"\b(where|which|list|all|show|located|locations?|states?|cities|city|how many|number)\b", ql)) or bool(_place(ql))) and not re.search(r"\b(risk\w*|health\w*|revenue|sales|csat|satisfaction|inventory|stock|attrition|salary|overtime|best|worst|weakest|critical)\b", ql)
             if _pl and re.search(r"\b(employees?|staff|workers?|people|headcount|manpower|workforce)\b", ql) and (_place(ql) or re.search(r"\b(where|which|most|highest|more|largest|big|fewest|least|lowest|number)\b", ql)): return staff_by_place(ql, scope)
             if _pl and re.search(r"\b(outlets?|stores?|branch\w*|franchises?)\b", ql) and _place(ql): return outlets_in_place(ql, scope)
-            if re.search(r"\b(state|states)\b", ql) and re.search(r"\b(outlets?|stores?|branch\w*)\b", ql): return by_state(ql)
+            if re.search(r"\b(state|states)\b", ql) and re.search(r"\b(outlets?|stores?|branch\w*)\b", ql): return by_state(ql) if not scope else {"answer": "State-wise comparisons cover the whole chain and are not available for your outlet role.", "df": None, "sql": ""}
             if re.search(r"\b(outlets?|stores?|branch\w*)\b", ql) and re.search(r"\b(risk\w*|health\w*|best|worst|weakest|strongest|critical|attention|problem\w*|performing|performance)\b", ql) and not re.search(r"\b(revenue|sales|csat|satisfaction|headcount)\b", ql): return risk_rank(ql, dec, scope)
             if re.search(r"\b(inventory|stock|stocks|stocked|sku|skus|items?|products?|ingredients?)\b", ql) and re.search(r"\b(refill\w*|restock\w*|re-?order\w*|replenish\w*|immediate\w*|urgent\w*|attention|run(ning)? (out|low)|shortage\w*|low|critical|need\w*|order now)\b", ql) and not re.search(r"\b(how many|count|average|total)\b", ql): return refill(scope)
             if re.search(r"\b(inventory|stock)\b", ql) and re.search(r"\b(how|status|holding|summary|overview|situation|look|doing|week|today|health)\b", ql) and not re.search(r"\b(how many|count|average|total|top|lowest|highest|which)\b", ql): return inventory_status(scope)

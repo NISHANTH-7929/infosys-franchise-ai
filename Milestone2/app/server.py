@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import gpu, qa as QA, analyst as AN, live_engine as LE, entities as EN, blocks as B
 import views_core as VC
+import rbac
 from localuser import USER
 dom = importlib.import_module("domain_franchise" if KIND == "Franchise" else "domain_freight")
 V = importlib.import_module("views_franchise" if KIND == "Franchise" else "views_freight")
@@ -37,10 +38,14 @@ def shutdown():
         except Exception: pass
 
 # ------------------------------------------------------------------ auth + context
-def user_of(request: Request): return USER                       # one local operator (admin): there is no login in this version
-def ctx(u, params=None): return {"dom": dom, "kind": KIND, "role": u["role"], "email": u["email"], "user": u, "scope": None, "params": params or {}}
-def need(c, cap): return None                                       # no roles yet
-def menu_for(role): return list(V.MENU)
+def user_of(request: Request): return USER                       # one local operator (admin): replaced by the Milestone 1 login (JWT) in the auth step
+app.state.user_of = lambda request: user_of(request)               # late-bound so hardening.py (metrics) always asks the current user_of
+def ctx(u, params=None):
+    """Identity and permission for one request. Raises 403 for an unknown role or a scoped role with no outlet. scope = the outlet id, or None for all outlets."""
+    return {"dom": dom, "kind": KIND, "role": rbac.role_of(u), "email": u["email"], "user": u, "scope": rbac.scope_for(u), "params": params or {}}
+def need(c, cap): rbac.need(c, cap)                                 # 403 when the role lacks the capability (see rbac.ROLE_CAPS)
+def _catalog(): return list(V.MENU) + [m for m in rbac.EXTRA_MENU if m[0] in V.PAGES]   # profile / admin appear once their page exists
+def menu_for(user): return rbac.menu_for(user if isinstance(user, str) else rbac.role_of(user), _catalog())
 def ok(msg="Done", **kw): return {"ok": True, "msg": msg, **kw}
 def bad(msg): return JSONResponse({"ok": False, "msg": msg}, status_code=400)
 
@@ -50,24 +55,27 @@ def public():
     return {"kind": KIND, "name": V.NAME, "stage": (s or {}).get("stage", "starting"), "gpu": {"cuda": False, "name": None}, "questions": [], "email_enabled": False, "demo": []}
 @app.get("/api/me")
 def me(request: Request):
-    return {"user": USER, "kind": KIND, "name": V.NAME, "menu": [{"id": i, "label": l, "icon": ic} for i, l, ic in V.MENU], "caps": [], "scope": None, "langs": ["English"], "questions": []}
+    u = user_of(request); c = ctx(u); pub = {k: u.get(k) for k in ("id", "email", "username", "role", "outlet", "created_at", "last_login") if k in u}   # never the password hash
+    return {"user": pub, "kind": KIND, "name": V.NAME, "menu": [{"id": i, "label": l, "icon": ic} for i, l, ic in menu_for(u)], "caps": sorted(rbac.caps_of(c["role"])), "scope": c["scope"], "langs": ["English"], "questions": []}
 # ------------------------------------------------------------------ live pulse
-def pulse():
+def pulse(scope=None):
+    """Live header numbers. A scoped role only gets its own outlet's tickets and health, never the chain-wide totals."""
     rt = LE.get_state("runtime", {}) or {}; boot = LE.get_state("boot", {}) or {}; d = VC.decision()
-    oa = B.Q("SELECT status, severity, COUNT(*) n FROM agent_actions WHERE status IN ('open','proposed') GROUP BY status, severity")
+    oa = B.Q("SELECT status, severity, COUNT(*) n FROM agent_actions WHERE status IN ('open','proposed')" + (" AND target=?" if scope else "") + " GROUP BY status, severity", (scope,) if scope else ())
     n = lambda st, sv=None: int(oa[(oa.status == st) & ((oa.severity == sv) if sv else True)].n.sum()) if len(oa) else 0
+    if scope and d: sh = (d.get("ev") or {}).get("health", {}).get(scope); d = {"score": sh, "risk": "High" if sh is not None and sh < 60 else "Medium" if sh is not None and sh < 80 else "Low", "id": d["id"]} if sh is not None else None
     return {"stage": boot.get("stage", "starting"), "ticks": rt.get("ticks", 0), "cycles": rt.get("cycles", 0), "last_cycle": rt.get("last_cycle"), "health": d["score"] if d else None, "risk": d["risk"] if d else None, "dec": d["id"] if d else 0,
             "open": n("open"), "critical": n("open", "Critical"), "proposed": 0, "gpu": {"cuda": True, "name": "", "used": 0, "total": 0, "llm": "off", "llm_name": "", "llm_done": 0, "llm_total": 0}, "worker_alive": bool(rt.get("last_cycle"))}
 @app.get("/api/pulse")
-def pulse_http(request: Request): user_of(request); return pulse()
+def pulse_http(request: Request): c = ctx(user_of(request)); return pulse(c["scope"])
 @app.get("/api/stream")
 async def stream(request: Request):
-    user_of(request)
+    sc = ctx(user_of(request))["scope"]
     async def gen():
         last = None; t0 = time.time()
         while True:
             if await request.is_disconnected(): break
-            try: p = await asyncio.to_thread(pulse)
+            try: p = await asyncio.to_thread(pulse, sc)
             except Exception as e: p = {"error": str(e)}
             k = json.dumps(p, sort_keys=True, default=str)
             if k != last or time.time() - t0 > 10: last = k; t0 = time.time(); yield f"data: {k}\n\n"
@@ -80,17 +88,18 @@ def _tabs_of(c, f):
     if f not in _TABS: _TABS[f] = f(c, None).get("tabs")
     return _TABS[f]
 def _page(c, pid, tab):
-    if pid == "copilot": return B.page("AI Copilot", "Ask about your data in plain English. Answers are exact database queries.", [{"t": "chat", "examples": EXAMPLES, "langs": ["English"]}], [], live=0)
+    if pid == "copilot": return B.page("AI Copilot", "Ask about your data in plain English. Answers are exact database queries.", [{"t": "chat", "examples": _examples(c.get("scope")), "langs": ["English"]}], [], live=0)
     f = V.PAGES.get(pid)
     if not f: raise HTTPException(404, "unknown page")
     o = f(c, tab); _TABS[f] = o.get("tabs"); return o
 @app.get("/api/page/{pid}")
 def page(pid: str, request: Request, tab: str = "", p: str = ""):
     u = user_of(request); c = ctx(u, json.loads(p) if p else {})
+    rbac.need_page(c, pid); rbac.guard_outlets(c, p, tab)                 # 403 for a page outside the role, or for a parameter naming another outlet
     t = time.time(); out = _page(c, pid, tab or None); out["id"] = pid; out["ms"] = round((time.time() - t) * 1000); return JSONResponse(B.clean(out))
 @app.get("/api/detail/{eid:path}")
 def detail(eid: str, request: Request):
-    u = user_of(request); c = ctx(u)
+    u = user_of(request); c = ctx(u); need(c, "view"); rbac.guard_outlets(c, eid)
     return JSONResponse(B.clean(V.detail(c, eid)))
 
 # ------------------------------------------------------------------ tickets, cycles, policy
@@ -117,7 +126,7 @@ def _run_one(agent):
 # ------------------------------------------------------------------ Franchise actions
 @app.post("/api/franchise/review")
 async def fr_review(request: Request):
-    import uuid; u = user_of(request); c = ctx(u); d = await request.json(); tx = str(d.get("comment", "")).strip()
+    import uuid; u = user_of(request); c = ctx(u); need(c, "review"); d = await request.json(); tx = str(d.get("comment", "")).strip(); rbac.own_outlet(c, d.get("outlet"))
     if not tx: return bad("Write a comment first")
     src = "eng_Latn"; en = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+|\+?\d[\d -]{8,}\d", "[removed]", tx)
     try: from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer; sc = SentimentIntensityAnalyzer().polarity_scores(en)["compound"]
@@ -127,7 +136,7 @@ async def fr_review(request: Request):
     LE.emit("review", d["outlet"], {"rating": rt}); return ok(f"Stored for {d['outlet']} (sentiment {sc:+.2f}{', translated from ' + src if src != 'eng_Latn' else ''}). The Sentiment agent includes it in its next cycle.", refresh=True)
 @app.post("/api/franchise/audit")
 async def fr_audit(request: Request):
-    import uuid; u = user_of(request); c = ctx(u); need(c, "resolve"); d = await request.json(); sc = int(d["score"])
+    import uuid; u = user_of(request); c = ctx(u); need(c, "resolve"); d = await request.json(); rbac.own_outlet(c, d.get("outlet")); sc = int(d["score"])
     with LE._DB_LOCK, LE.conn() as cn: cn.execute("INSERT INTO audits(audit_id,outlet_id,audit_date,score,violations,category,status,notes) VALUES(?,?,?,?,?,?,?,?)", ("AUD-U" + uuid.uuid4().hex[:10], d["outlet"], datetime.date.today().isoformat(), sc, int((100 - sc) / 6), d["category"], "Pass" if sc >= 80 else "Warning" if sc >= 60 else "Fail", d.get("notes", "")))
     LE.emit("audit", d["outlet"], {"score": sc}); LE.audit(u["email"], "audit_logged", d["outlet"], str(sc)); await asyncio.to_thread(_run_one, "audit"); return ok("Saved and evaluated by the Audit agent.", refresh=True)
 
@@ -151,11 +160,11 @@ async def fq_reroute(request: Request):
     LE.audit(u["email"], "manual_reroute", sid, note); return ok(note or "no change", refresh=True)
 @app.post("/api/freight/attach")
 async def fq_attach(request: Request):
-    u = user_of(request); c = ctx(u)
+    u = user_of(request); c = ctx(u); need(c, "quote")
     d = await request.json(); dom.attach_doc(d["ref"], d["doc"], u["email"]); LE.audit(u["email"], "doc_attached", d["ref"], d["doc"]); return ok("Attached. Quotes re-run immediately; shipments clear on the next customs cycle.", refresh=True)
 @app.post("/api/freight/readdoc")
 async def fq_readdoc(request: Request, file: UploadFile = File(...)):
-    u = user_of(request); data = await file.read(); txt = ""
+    u = user_of(request); need(ctx(u), "quote"); data = await file.read(); txt = ""
     try:
         if file.filename.lower().endswith(".pdf"):
             import pdfplumber
@@ -175,18 +184,18 @@ def _chat_db():
     c = sqlite3.connect(DB_PATH, timeout=30); c.execute("PRAGMA journal_mode=WAL;"); c.execute("CREATE TABLE IF NOT EXISTS copilot_chats(id TEXT PRIMARY KEY, email TEXT, title TEXT, ts TEXT, data TEXT)"); c.execute("CREATE INDEX IF NOT EXISTS ix_chat_email ON copilot_chats(email, ts)"); return c
 @app.get("/api/chats")
 async def chats_list(request: Request):
-    u = user_of(request)
+    u = user_of(request); need(ctx(u), "copilot")
     with _chat_db() as c: rows = c.execute("SELECT id, title, ts FROM copilot_chats WHERE email=? ORDER BY ts DESC LIMIT 60", (u["email"],)).fetchall()
     return {"ok": True, "chats": [{"id": r[0], "title": r[1], "ts": r[2]} for r in rows]}
 @app.get("/api/chats/{cid}")
 async def chats_get(cid: str, request: Request):
-    u = user_of(request)
+    u = user_of(request); need(ctx(u), "copilot")
     with _chat_db() as c: r = c.execute("SELECT title, data FROM copilot_chats WHERE id=? AND email=?", (cid, u["email"])).fetchone()
     if not r: raise HTTPException(404, "chat not found")
     return {"ok": True, "title": r[0], "msgs": json.loads(r[1])}
 @app.post("/api/chats/save")
 async def chats_save(request: Request):
-    u = user_of(request); d = await request.json(); cid = re.sub(r"[^a-zA-Z0-9_-]", "", str(d.get("id") or ""))[:40] or ("c" + str(int(time.time() * 1000))); msgs = d.get("msgs") or []
+    u = user_of(request); need(ctx(u), "copilot"); d = await request.json(); cid = re.sub(r"[^a-zA-Z0-9_-]", "", str(d.get("id") or ""))[:40] or ("c" + str(int(time.time() * 1000))); msgs = d.get("msgs") or []
     if not isinstance(msgs, list) or not msgs: return bad("nothing to save")
     msgs = [{"role": m.get("role"), "text": str(m.get("text", ""))[:20000], "en": (str(m["en"])[:20000] if m.get("en") else None), "lang": m.get("lang"), "sql": str(m.get("sql") or "")[:1500]} for m in msgs[-80:]]
     title = next((m["text"] for m in msgs if m["role"] == "user"), "Chat")[:70]; now = datetime.datetime.now().isoformat(timespec="seconds")
@@ -197,7 +206,7 @@ async def chats_save(request: Request):
     return {"ok": True, "id": cid}
 @app.delete("/api/chats/{cid}")
 async def chats_del(cid: str, request: Request):
-    u = user_of(request)
+    u = user_of(request); need(ctx(u), "copilot")
     with _chat_db() as c: c.execute("DELETE FROM copilot_chats WHERE id=? AND email=?", (cid, u["email"]))
     return {"ok": True}
 @app.post("/api/weather/refresh")
@@ -219,22 +228,28 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 # ------------------------------------------------------------------ AI Copilot (SQL only: greetings + exact database answers)
 EXAMPLES = ["Which outlets are at highest risk?", "Why is OUT-007 flagged?", "How is inventory holding up?", "Top 5 outlets by revenue", "Which stores have the lowest customer satisfaction?"]
+def _examples(scope=None): return EXAMPLES if not scope else [f"Why is {scope} flagged?", "How is inventory holding up?", f"How are sales trending at {scope}?", f"How is staffing at {scope}?"]    # a scoped role gets examples about its own outlet
 GREET = re.compile(r"^\W*(hi|hello|hey|hii|good (morning|afternoon|evening)|namaste|yo)\b[\w\s!.,]*$", re.I)
 THANKS = re.compile(r"^\W*(thanks|thank you|thx|ok thanks|great|cool)\b[\w\s!.,]*$", re.I)
 @app.post("/api/copilot")
 async def copilot(request: Request):
-    d = await request.json(); q = str(d.get("q", "")).strip()[:800]
+    u = user_of(request); c = ctx(u); need(c, "copilot"); d = await request.json(); q = str(d.get("q", "")).strip()[:800]
+    sc, mask = c["scope"], rbac.masked(c["role"])                         # the Copilot only reads what this role may see: own outlet only for Store Manager and Staff, no salary or personal data for Staff and Auditor
+    def _others(txt): return sorted({m.upper() for m in rbac.OUTLET_RE.findall(str(txt))} - {sc}) if sc else []
     def gen():
         t0 = time.time()
         if GREET.match(q): yield _sse("final", text="Hello! I answer questions about your live data with exact database queries. Try one of the examples below.", sql="", ms=0); yield _sse("done"); return
         if THANKS.match(q): yield _sse("final", text="You're welcome! Ask me anything else about your data.", sql="", ms=0); yield _sse("done"); return
+        if _others(q): yield _sse("final", text=f"{', '.join(_others(q))} is outside your outlet scope ({sc}). Ask about {sc} instead.", sql="", ms=0); yield _sse("done"); return
         exact = None
-        try: exact = AN.answer(KIND, q, None, VC.decision(), dom) or QA.answer(KIND, q, None, None)
+        try: exact = AN.answer(KIND, q, sc, VC.decision(), dom) or QA.answer(KIND, q, sc, mask)
         except Exception as e: print("copilot failed:", repr(e), file=sys.stderr)
+        if exact and exact.get("answer") and sc and _others(exact["answer"] + (QA.md(exact["df"]) if exact.get("df") is not None else "") + str(exact.get("extra") or "")):
+            exact = {"answer": f"That answer would include other outlets, which your role cannot see. Ask about {sc} instead.", "sql": "", "df": None}     # safety net for any intent that forgets the scope
         if exact and exact.get("answer"):
             tbl = (QA.md(exact["df"]) if exact.get("df") is not None else "") + (("\n\n" + exact["extra"]) if exact.get("extra") else "")
             yield _sse("exact", sql=exact["sql"], rows=0 if exact["df"] is None else len(exact["df"]))
             final = exact["answer"] + (("\n\n" + tbl) if tbl else ""); yield _sse("final", text=final, sql=exact.get("sql", ""), ms=round((time.time() - t0) * 1000))
-        else: yield _sse("final", text="I could not compute an exact answer to that from the tables. Try one of these:\n" + "\n".join("- " + e for e in EXAMPLES), sql="", ms=round((time.time() - t0) * 1000))
+        else: yield _sse("final", text="I could not compute an exact answer to that from the tables. Try one of these:\n" + "\n".join("- " + e for e in _examples(sc)), sql="", ms=round((time.time() - t0) * 1000))
         yield _sse("done")
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
