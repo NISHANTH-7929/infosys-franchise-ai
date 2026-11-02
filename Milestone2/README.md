@@ -190,7 +190,7 @@ The numbers come from the generated demo data and change with every fresh run.
 
 ## 7. Design (Step 8)
 
-A consistent colour theme, readable tables, responsive layout (a phone gets a bottom navigation bar), a **dark-mode switch**, loading states, and clear error messages (for example **"Access denied (403)"**). Designed login, sign-up, recovery, profile and admin pages.
+A consistent **midnight navy and teal** colour theme in light mode (navy sidebar, white cards on cool slate, teal accents, amber for warnings), readable tables, responsive layout (a phone gets a bottom navigation bar), a **dark-mode switch**, loading states, and clear error messages (for example **"Access denied (403)"**). Designed login, sign-up, recovery, profile and admin pages.
 
 ---
 

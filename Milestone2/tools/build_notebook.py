@@ -38,7 +38,7 @@ INTRO = """# FranchiseOps AI - Milestone 2
 
 A multi-user franchise operations platform: **FastAPI + SQLite + JWT + RBAC**, six working agents and a SQL-only AI Copilot.
 
-**How to run:** add the secrets below in the Colab sidebar (key icon, *Notebook access* ON), then **Runtime -> Run all**. The last cell prints **Open the app**.
+**How to run:** add the secrets below in the Colab sidebar (key icon, *Notebook access* ON), then **Runtime -> Run all**. The last cell prints **Open the app** (an ngrok link) and a backup Colab link.
 
 | Secret | Used for |
 |---|---|
@@ -46,7 +46,7 @@ A multi-user franchise operations platform: **FastAPI + SQLite + JWT + RBAC**, s
 | `ADMIN_PASSWORD` | password of the first Admin account (required) |
 | `ADMIN_EMAIL_ID` | e-mail of the first Admin (optional, default `admin@infosys.com`) |
 | `EMAIL_ADDRESS`, `EMAIL_PASSWORD` | Gmail sender and app password for password-recovery codes (from Milestone 1) |
-| `NGROK_AUTHTOKEN` | fallback public link |
+| `NGROK_AUTHTOKEN` | the public link (recommended: Colab's own link is sometimes blocked) |
 
 Sign in as `admin` (or the Admin e-mail) with your `ADMIN_PASSWORD`. Everyone else creates an account on the sign-up page and picks their own role; an Admin can promote or demote them in the Admin Dashboard.
 Never type a password or token into a cell."""
@@ -84,21 +84,29 @@ for _ in range(90):
 else:
     print(open('/content/app/server.log').read()[-3000:])'''
 
-OPEN = '''from IPython.display import HTML, display
+OPEN = '''import os
+from IPython.display import HTML, display
+links = []
+# 1) ngrok: a normal public https link that works in any browser (Colab's own link is often blocked or answers 404)
+try:
+    from pyngrok import ngrok
+    token = os.environ.get('NGROK_AUTHTOKEN')
+    if not token:
+        from google.colab import userdata
+        token = userdata.get('NGROK_AUTHTOKEN')
+    ngrok.kill()
+    ngrok.set_auth_token(token)
+    links.append(("Open the app", ngrok.connect(8000).public_url, "ngrok link. If ngrok shows a notice page, click Visit Site."))
+except Exception as e:
+    print('ngrok link unavailable (add the NGROK_AUTHTOKEN secret):', e)
+# 2) Colab's own proxy link as a backup
 try:
     from google.colab import output
-    url = output.eval_js("google.colab.kernel.proxyPort(8000, {'cache': false})")
-    display(HTML(f'<a href="{url}" target="_blank" style="font-size:18px">Open the app</a><br><small>{url}</small>'))
+    links.append(("Backup: Colab link", output.eval_js("google.colab.kernel.proxyPort(8000, {'cache': false})"), "Works only in a browser signed in to the same Google account."))
 except Exception as e:
-    print('Colab proxy unavailable:', e)
-    try:
-        from google.colab import userdata
-        from pyngrok import ngrok
-        ngrok.set_auth_token(userdata.get('NGROK_AUTHTOKEN'))
-        url = ngrok.connect(8000).public_url
-        display(HTML(f'<a href="{url}" target="_blank" style="font-size:18px">Open the app</a><br><small>{url}</small>'))
-    except Exception as e2:
-        print('ngrok failed:', e2)'''
+    print('Colab proxy link unavailable:', e)
+for label, url, note in links:
+    display(HTML(f'<p><a href="{url}" target="_blank" style="font-size:18px">{label}</a><br><small>{url}<br>{note}</small></p>'))'''
 
 def build():
     cells = [md(INTRO),
