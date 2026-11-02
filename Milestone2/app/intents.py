@@ -205,12 +205,17 @@ INTENTS = [
     ("total_outlets",           "How many outlets are there?",                          r"how many outlet|number of outlet|count.*outlet|total outlet",                total_outlets),
 ]
 EXAMPLES = [e for _, e, _, _ in INTENTS]
+RANKING = {"lowest_csat", "highest_csat", "lowest_revenue", "highest_revenue", "highest_staff_count", "most_negative_reviews", "highest_violations", "highest_operating_cost", "best_campaign_roi", "worst_campaign_roi"}
 
 def answer(q, scope=None, mask=False):
     """-> dict(intent, answer, df, sql, rows) for a recognised question, else None."""
     nq = normalize(q)
     for iid, _ex, rx, fn in INTENTS:
-        if re.search(rx, nq): return fn(nq, scope, mask)
+        if re.search(rx, nq):
+            r = fn(nq, scope, mask)
+            if scope and r and iid in RANKING and r.get("df") is not None:       # one visible outlet is not a ranking: say so instead of calling it "the highest"
+                r["answer"] = f"Rankings compare outlets across the chain, so for your role this shows {scope} only. " + r["answer"]
+            return r
     return None
 
 def suggestions(scope=None, seed=""):
