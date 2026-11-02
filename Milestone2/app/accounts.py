@@ -44,7 +44,7 @@ def init():
     if seed: LE.audit("system", "admin_seeded", config.ADMIN_EMAIL_ID.lower(), "first Admin created from the ADMIN_PASSWORD secret")
 
 PUBLIC_COLS = "id, email, username, role, outlet, locked, failed_attempts, created_at, last_login"
-def public(r): return {"id": r["id"], "email": r["email"], "username": r["username"], "role": r["role"], "outlet": r["outlet"], "locked": bool(r["locked"]), "created_at": r["created_at"], "last_login": r["last_login"]}
+def public(r): return {"id": r["id"], "email": r["email"], "username": r["username"], "role": r["role"], "outlet": r["outlet"] if r["role"] in rbac.SCOPED_ROLES else None, "locked": bool(r["locked"]), "created_at": r["created_at"], "last_login": r["last_login"]}
 def outlets():
     with db() as c: return [r[0] for r in c.execute("SELECT outlet_id FROM outlets ORDER BY outlet_id").fetchall()]
 
@@ -224,7 +224,7 @@ def admin_overview(request: Request):
         rows = cn.execute(f"SELECT {PUBLIC_COLS} FROM users ORDER BY id").fetchall(); per = {r: 0 for r in rbac.ROLES}
         for r in rows: per[r["role"]] = per.get(r["role"], 0) + 1
         log = [dict(x) for x in cn.execute("SELECT ts, actor, event, target, detail FROM audit_log ORDER BY audit_id DESC LIMIT 50").fetchall()]
-    return {"ok": True, "users": [public(r) for r in rows], "kpis": {"total": len(rows), "locked": sum(1 for r in rows if r["locked"]), "active": sum(1 for r in rows if not r["locked"]), "per_role": per},
+    return {"ok": True, "users": [{**public(r), "saved_outlet": r["outlet"]} for r in rows], "kpis": {"total": len(rows), "locked": sum(1 for r in rows if r["locked"]), "active": sum(1 for r in rows if not r["locked"]), "per_role": per},
             "activity": log, "roles": rbac.ROLES, "scoped_roles": sorted(rbac.SCOPED_ROLES), "outlets": outlets(), "matrix": rbac.permission_table()}
 
 @router.post("/api/admin/users")
@@ -245,9 +245,9 @@ async def admin_role(uid: int, request: Request):
             outlet = outlet or (t["outlet"] or "")
             if not outlet: fail(f"Choose the outlet for a {role}.")
             if outlet not in outlets(): fail("That outlet does not exist.")
-        else: outlet = None
+        else: outlet = t["outlet"]                         # keep it: the person may go back to a one-outlet role later
         cn.execute("UPDATE users SET role=?, outlet=? WHERE id=?", (role, outlet, uid))
-    LE.audit(u["email"], "role_changed", t["email"], f"{t['role']} -> {role}" + (f" ({outlet})" if outlet else "")); return ok(f"{t['username']} is now {role}.")
+    LE.audit(u["email"], "role_changed", t["email"], f"{t['role']} -> {role}" + (f" ({outlet})" if outlet and role in rbac.SCOPED_ROLES else "")); return ok(f"{t['username']} is now {role}.")
 
 @router.post("/api/admin/users/{uid}/lock")
 def admin_lock(uid: int, request: Request): return _set_lock(uid, request, 1)
