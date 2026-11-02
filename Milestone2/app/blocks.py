@@ -4,9 +4,9 @@ import math, json, datetime
 import numpy as np, pandas as pd
 import live_engine as LE
 
-TEAL, BLUE, AMBER, RED, VIOLET, GREEN, PINK, GREY = "#12a594", "#3e63dd", "#f5a524", "#e5484d", "#8e4ec6", "#30a46c", "#d6409f", "#8b8d98"
-PRI = "#5b5bd6"
-PAL = [PRI, TEAL, AMBER, VIOLET, RED, GREEN, PINK, BLUE, GREY]
+TEAL, BLUE, AMBER, RED, VIOLET, GREEN, PINK, GREY = "#0d9488", "#2563eb", "#f59e0b", "#e5484d", "#7c3aed", "#16a34a", "#db2777", "#64748b"
+PRI = "#0f766e"
+PAL = [PRI, BLUE, AMBER, VIOLET, RED, GREEN, PINK, TEAL, GREY]
 TONE = {"Critical": RED, "High": RED, "Warning": AMBER, "Medium": AMBER, "Info": BLUE, "Low": TEAL, "Pass": TEAL, "Fail": RED}
 
 def Q(sql, p=()):
