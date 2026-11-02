@@ -184,7 +184,11 @@ def refill(scope, n=10):
             "extra": "**How to read it:** *days_of_cover* is how long current stock lasts at current demand; *lead_days* is how long the supplier takes. When cover is shorter than lead time, stock-out is certain unless you order now (or transfer stock from a nearby outlet). The matching *reorder* tickets are raised by the agent."}
 
 # ------------------------------------------------------------------------------------------------ router
-def answer(kind, q, scope=None, dec=None, dom=None):
+def answer(kind, q, scope=None, dec=None, dom=None, mask=False):
+    if kind == "Franchise":
+        import intents                                   # the 23 SQL question patterns (spelling tolerant, scope and mask aware)
+        r = intents.answer(q, scope, mask)
+        if r: return r
     r = _answer(kind, q, scope, dec, dom)
     if r: r["complete"] = True
     return r

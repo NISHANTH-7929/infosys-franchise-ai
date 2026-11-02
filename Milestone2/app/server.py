@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import gpu, qa as QA, analyst as AN, live_engine as LE, entities as EN, blocks as B
 import views_core as VC
-import rbac, accounts
+import rbac, accounts, intents
 dom = importlib.import_module("domain_franchise" if KIND == "Franchise" else "domain_freight")
 V = importlib.import_module("views_franchise" if KIND == "Franchise" else "views_freight")
 HERE = os.path.dirname(os.path.abspath(__file__)); STATIC = os.path.join(HERE, "static")
@@ -227,8 +227,8 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 # ------------------------------------------------------------------ AI Copilot (SQL only: greetings + exact database answers)
-EXAMPLES = ["Which outlets are at highest risk?", "Why is OUT-007 flagged?", "How is inventory holding up?", "Top 5 outlets by revenue", "Which stores have the lowest customer satisfaction?"]
-def _examples(scope=None): return EXAMPLES if not scope else [f"Why is {scope} flagged?", "How is inventory holding up?", f"How are sales trending at {scope}?", f"How is staffing at {scope}?"]    # a scoped role gets examples about its own outlet
+EXAMPLES = ["Which outlet has the lowest customer satisfaction?", "How many inventory items need reordering?", "Which campaign has the best ROI?", "Show negative reviews this week", "Show failed audits"]
+def _examples(scope=None): return EXAMPLES if not scope else [f"How many staff does {scope} have?", "Show inventory items below reorder level", "Show negative reviews this week", "Show failed audits"]    # a scoped role gets examples about its own outlet
 GREET = re.compile(r"^\W*(hi|hello|hey|hii|good (morning|afternoon|evening)|namaste|yo)\b[\w\s!.,]*$", re.I)
 THANKS = re.compile(r"^\W*(thanks|thank you|thx|ok thanks|great|cool)\b[\w\s!.,]*$", re.I)
 @app.post("/api/copilot")
@@ -242,14 +242,15 @@ async def copilot(request: Request):
         if THANKS.match(q): yield _sse("final", text="You're welcome! Ask me anything else about your data.", sql="", ms=0); yield _sse("done"); return
         if _others(q): yield _sse("final", text=f"{', '.join(_others(q))} is outside your outlet scope ({sc}). Ask about {sc} instead.", sql="", ms=0); yield _sse("done"); return
         exact = None
-        try: exact = AN.answer(KIND, q, sc, VC.decision(), dom) or QA.answer(KIND, q, sc, mask)
+        try: exact = AN.answer(KIND, q, sc, VC.decision(), dom, mask) or QA.answer(KIND, q, sc, mask)
         except Exception as e: print("copilot failed:", repr(e), file=sys.stderr)
         if exact and exact.get("answer") and sc and _others(exact["answer"] + (QA.md(exact["df"]) if exact.get("df") is not None else "") + str(exact.get("extra") or "")):
             exact = {"answer": f"That answer would include other outlets, which your role cannot see. Ask about {sc} instead.", "sql": "", "df": None}     # safety net for any intent that forgets the scope
         if exact and exact.get("answer"):
             tbl = (QA.md(exact["df"]) if exact.get("df") is not None else "") + (("\n\n" + exact["extra"]) if exact.get("extra") else "")
-            yield _sse("exact", sql=exact["sql"], rows=0 if exact["df"] is None else len(exact["df"]))
-            final = exact["answer"] + (("\n\n" + tbl) if tbl else ""); yield _sse("final", text=final, sql=exact.get("sql", ""), ms=round((time.time() - t0) * 1000))
-        else: yield _sse("final", text="I could not compute an exact answer to that from the tables. Try one of these:\n" + "\n".join("- " + e for e in _examples(sc)), sql="", ms=round((time.time() - t0) * 1000))
+            rows = exact.get("rows", 0 if exact.get("df") is None else len(exact["df"])); yield _sse("exact", sql=exact["sql"], rows=rows)
+            foot = ("\n\n*%d row%s returned by a read-only SQL query (open \"Show the exact query\").*" % (rows, "" if rows == 1 else "s")) if exact.get("sql") else ""
+            final = exact["answer"] + (("\n\n" + tbl) if tbl else "") + foot; yield _sse("final", text=final, sql=exact.get("sql", ""), ms=round((time.time() - t0) * 1000))
+        else: yield _sse("final", text="Sorry, I can only answer from the franchise database (outlets, staff, inventory, campaigns, reviews, audits, tickets and sales), and I could not match that question. Try one of these:\n" + "\n".join("- " + e for e in intents.suggestions(sc, q)), sql="", ms=round((time.time() - t0) * 1000))
         yield _sse("done")
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
