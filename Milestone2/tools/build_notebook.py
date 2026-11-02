@@ -94,8 +94,14 @@ try:
     if not token:
         from google.colab import userdata
         token = userdata.get('NGROK_AUTHTOKEN')
+    token = (token or '').strip()
     ngrok.kill()
-    ngrok.set_auth_token(token)
+    from pyngrok import conf
+    conf.get_default().auth_token = token          # used when ngrok starts
+    try:
+        ngrok.set_auth_token(token)
+    except Exception as e:                           # pyngrok raises here even when ngrok saved the token, so carry on and connect
+        print('ngrok token note (usually harmless):', str(e)[:90])
     links.append(("Open the app", ngrok.connect(8000).public_url, "ngrok link. If ngrok shows a notice page, click Visit Site."))
 except Exception as e:
     print('ngrok link unavailable (add the NGROK_AUTHTOKEN secret):', e)
