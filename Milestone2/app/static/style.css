@@ -226,3 +226,10 @@ form.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap
  .chat .cin{gap:6px;padding:7px}
  .chat .cin .btn{padding:7px 10px}
 }
+/* sign out, notices and admin table details (RBAC integration) */
+.login-status.is-notice{color:#0b7a6c}:root[data-theme="dark"] .login-status.is-notice{color:#70d9a2}
+.sidefoot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 6px 2px;margin-top:8px;border-top:1px solid var(--line)}
+.sidefoot .who{min-width:0}.sidefoot .who b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidefoot .who small{display:block;color:var(--mut);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-kpis .kpi .v{color:var(--tx)}
+.admin-role-select{width:auto;min-width:140px;padding:5px 8px}.admin-table td{vertical-align:middle;white-space:nowrap}
+@media(max-width:1000px){.sidefoot .who{display:none}.sidefoot{justify-content:center}}

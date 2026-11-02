@@ -14,10 +14,12 @@ applyTheme();
 const LANGS_CODE={};
 function pageIsAllowed(id){return !!(S.me&&Array.isArray(S.me.menu)&&S.me.menu.some(item=>item&&item.id===id))}
 function firstAllowedPage(){const menu=S.me&&Array.isArray(S.me.menu)?S.me.menu:[];const first=menu.find(item=>item&&typeof item.id==="string"&&item.id);return first?first.id:null}
-async function api(path,opt={}){const o={credentials:"same-origin",...opt};if(opt.json!==undefined){o.method=o.method||"POST";o.headers={"Content-Type":"application/json"};o.body=JSON.stringify(opt.json)}
+function authToken(){try{return sessionStorage.getItem("fo_token")||localStorage.getItem("fo_token")||""}catch(e){return""}}
+function setToken(tok,remember){try{sessionStorage.removeItem("fo_token");localStorage.removeItem("fo_token");if(tok)(remember?localStorage:sessionStorage).setItem("fo_token",tok)}catch(e){}}
+async function api(path,opt={}){const o={credentials:"same-origin",...opt};o.headers={...(opt.headers||{})};if(opt.json!==undefined){o.method=o.method||"POST";o.headers["Content-Type"]="application/json";o.body=JSON.stringify(opt.json)}const tk=authToken();if(tk)o.headers.Authorization="Bearer "+tk;
  let r;try{r=await fetch(path,o)}catch{return{ok:false,error:true,networkError:true,msg:"Unable to reach the FranchiseOps AI backend. Check that the application server is running."}}
  let d=null;try{d=await r.json()}catch(e){}
- if(r.status===401&&S.me&&!path.includes("login")){S.me=null;render();return{ok:false,msg:"Session ended"}}
+ if(r.status===401&&S.me&&!path.includes("login")){setToken("");S.me=null;S.authScreen="login";S.loginNotice=(d&&(d.detail||d.msg))||"Your session ended. Sign in again.";render();return{ok:false,msg:"Session ended"}}
  if(!d)d={ok:false,msg:r.ok?"The server returned an unreadable response.":"Error "+r.status};
  if(!r.ok){d.ok=false;d.error=true;d.status=r.status;if(!d.msg)d.msg=d.detail||("Error "+r.status)}
  return d}
@@ -136,7 +138,7 @@ async function sse(url,json,on){
  if(chat)setChatState(chat,"loading","Connecting to Copilot…");
  let completed=false;
  try{
-  const r=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(json)});
+  const r=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json",...(authToken()?{Authorization:"Bearer "+authToken()}:{})},body:JSON.stringify(json)});
   if(!r.ok){
    const message=`Copilot could not complete the request (HTTP ${r.status}). Please try again.`;
    if(chat){showChatError(chat,message);return}
@@ -164,7 +166,7 @@ async function sse(url,json,on){
   throw error;
  }
 }
-R.chat=b=>{let cid=null,hist=[];const el=h("div",{class:"card chat"}),msgs=h("div",{class:"msgs"}),inp=h("input",{placeholder:"Ask anything: the agents run first, then the GPU model answers from their evidence",onkeydown:e=>{if(e.key==="Enter")send(inp.value)}});
+R.chat=b=>{let cid=null,hist=[];const el=h("div",{class:"card chat"}),msgs=h("div",{class:"msgs"}),inp=h("input",{placeholder:"Ask about outlets, staff, inventory, campaigns, reviews or audits",onkeydown:e=>{if(e.key==="Enter")send(inp.value)}});
  const lang=h("select",{class:"in",style:"width:auto",onchange:()=>{S.lang=lang.value;localStorage.setItem("lang",S.lang)}},...b.langs.map(l=>h("option",{value:l,selected:l===S.lang},l)));
  const hsel=h("select",{class:"in",style:"width:auto;max-width:260px",onchange:()=>{if(hsel.value)openChat(hsel.value)}},h("option",{value:""},"Previous chats…"));
  const listChats=async()=>{const r=await api("/api/chats");if(!r.chats)return;hsel.replaceChildren(h("option",{value:""},r.chats.length?`Previous chats (${r.chats.length})`:"No saved chats yet"),...r.chats.map(c=>h("option",{value:c.id,selected:c.id===cid},c.title+" · "+(c.ts||"").replace("T"," ").slice(5,16))));return r.chats};
@@ -176,7 +178,7 @@ R.chat=b=>{let cid=null,hist=[];const el=h("div",{class:"card chat"}),msgs=h("di
  listChats().then(cs=>{if(cs&&cs.length&&!hist.length)openChat(cs[0].id)});
  const send=async q=>{q=q.trim();if(!q)return;inp.value="";hist.push({role:"user",text:q});msgs.append(h("div",{class:"m u"},q));const a=h("div",{class:"m a"}),stg=h("div"),tr=h("div"),out=h("div",{class:"md"});a.append(stg,tr,out);msgs.append(a);let acc="";const sc=()=>{msgs.lastChild.scrollIntoView({block:"nearest"})};
   await sse("/api/copilot",{q,lang:S.lang},ev=>{if(ev.ev==="stage"){stg.append(h("div",{class:"st"},ev.text))}else if(ev.ev==="cites"){const d=h("details",{class:"cites"},h("summary",null,`Sources (${ev.rows.length})`),...ev.rows.map(r=>h("div",{class:"st",title:r.text},h("b",null,`[${r.n}] `),`${r.title} · ${r.source} · ${r.why||r.score}`)));stg.append(d)}else if(ev.ev==="trace"){tr.replaceChildren(h("div",{class:"tbl",style:"margin:6px 0"},h("table",null,h("tbody",null,...ev.rows.map(r=>h("tr",null,h("td",null,r.agent),h("td",null,h("span",{class:"pill",style:`color:${tone(r.risk)};border-color:${tone(r.risk)}55`},r.risk)),h("td",{style:"white-space:normal"},r.finding)))))))}else if(ev.ev==="tok"){acc+=ev.text;out.innerHTML=md(acc)}else if(ev.ev==="final"){out.innerHTML=md(ev.text);hist.push({role:"assistant",text:ev.text,en:ev.en,lang:ev.lang,sql:ev.sql});saveChat();if(ev.en){const tg=h("a",{class:"lnk",style:"cursor:pointer;font-size:12px;margin-left:8px",onclick:()=>{const on=tg._e=!tg._e;out.innerHTML=md(on?ev.en:ev.text);tg.textContent=on?"Show "+(ev.lang||"translation"):"Show English original"}},"Show English original");stg.append(h("div",{class:"st"},"Translated with NLLB-200 ",tg))}if(ev.sql)stg.append(h("details",{class:"cites"},h("summary",null,"Show the exact query"),h("pre",{style:"white-space:pre-wrap;font-size:11px"},ev.sql)));stg.append(h("div",{class:"st"},`done in ${(ev.ms/1000).toFixed(1)}s`+(ev.tok_s?` · ${ev.tok_s} tok/s`:"")))}sc()})};
- el.append(h("div",{style:"display:flex;gap:8px;align-items:center;flex-wrap:wrap"},h("button",{class:"btn sm",onclick:newChat},"+ New chat"),hsel,h("button",{class:"btn sm ghost",onclick:delChat,title:"Delete this chat"},"Delete"),h("b",{style:"margin-left:8px"},"Answer language"),lang,h("span",{class:"sub",style:"margin:0"},"NLLB-200 translates in and out")),msgs,h("div",{class:"filters"},...b.examples.map(e=>h("span",{class:"chip",onclick:()=>send(e)},e))),h("div",{class:"cin"},inp,(()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR)return null;const VL={Hindi:"hi-IN",Tamil:"ta-IN",Telugu:"te-IN",Kannada:"kn-IN",Malayalam:"ml-IN",Bengali:"bn-IN",Gujarati:"gu-IN",Marathi:"mr-IN",Punjabi:"pa-IN",Urdu:"ur-IN",Arabic:"ar-SA",French:"fr-FR",German:"de-DE",Spanish:"es-ES",Portuguese:"pt-PT",Chinese:"zh-CN",Japanese:"ja-JP",Korean:"ko-KR",Russian:"ru-RU",Indonesian:"id-ID",Turkish:"tr-TR",Italian:"it-IT",Dutch:"nl-NL",Thai:"th-TH",Vietnamese:"vi-VN"};let rec=null;const mic=h("button",{class:"btn",title:"Speak your question (browser speech recognition)",onclick:()=>{if(rec){rec.stop();return}rec=new SR();const k=Object.keys(VL).find(x=>S.lang.startsWith(x));rec.lang=k?VL[k]:"en-IN";rec.interimResults=true;rec.onresult=e=>{inp.value=[...e.results].map(r=>r[0].transcript).join(" ")};rec.onend=()=>{rec=null;mic.textContent="🎤";if(inp.value.trim())send(inp.value)};mic.textContent="⏺";try{rec.start()}catch(e){rec=null;mic.textContent="🎤"}}},"🎤");return mic})(),h("button",{class:"btn primary",onclick:()=>send(inp.value)},"Ask")));return{el,update(){}}};
+ el.append(h("div",{style:"display:flex;gap:8px;align-items:center;flex-wrap:wrap"},h("button",{class:"btn sm",onclick:newChat},"+ New chat"),hsel,h("button",{class:"btn sm ghost",onclick:delChat,title:"Delete this chat"},"Delete"),h("b",{style:"margin-left:8px"},"Answer language"),lang,null),msgs,h("div",{class:"filters"},...b.examples.map(e=>h("span",{class:"chip",onclick:()=>send(e)},e))),h("div",{class:"cin"},inp,(()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR)return null;const VL={Hindi:"hi-IN",Tamil:"ta-IN",Telugu:"te-IN",Kannada:"kn-IN",Malayalam:"ml-IN",Bengali:"bn-IN",Gujarati:"gu-IN",Marathi:"mr-IN",Punjabi:"pa-IN",Urdu:"ur-IN",Arabic:"ar-SA",French:"fr-FR",German:"de-DE",Spanish:"es-ES",Portuguese:"pt-PT",Chinese:"zh-CN",Japanese:"ja-JP",Korean:"ko-KR",Russian:"ru-RU",Indonesian:"id-ID",Turkish:"tr-TR",Italian:"it-IT",Dutch:"nl-NL",Thai:"th-TH",Vietnamese:"vi-VN"};let rec=null;const mic=h("button",{class:"btn",title:"Speak your question (browser speech recognition)",onclick:()=>{if(rec){rec.stop();return}rec=new SR();const k=Object.keys(VL).find(x=>S.lang.startsWith(x));rec.lang=k?VL[k]:"en-IN";rec.interimResults=true;rec.onresult=e=>{inp.value=[...e.results].map(r=>r[0].transcript).join(" ")};rec.onend=()=>{rec=null;mic.textContent="🎤";if(inp.value.trim())send(inp.value)};mic.textContent="⏺";try{rec.start()}catch(e){rec=null;mic.textContent="🎤"}}},"🎤");return mic})(),h("button",{class:"btn primary",onclick:()=>send(inp.value)},"Ask")));return{el,update(){}}};
 
 // ---------------------------------------------------------------- shell
 const UI={};
@@ -189,132 +191,155 @@ UI.go=(id,tab,params)=>{
  history.replaceState(null,"","#"+target+(S.tab?":"+S.tab:""));loadPage(false);renderNav();
  if(!allowed){const page=S.me.menu.find(item=>item&&item.id===target);toast(`Access unavailable: ${id||"that page"} is not in your available pages. Redirected to ${page?page.label:target}.`,true)}
 };
+function fmtTime(t){if(!t)return"Never";const d=new Date(t);return isNaN(d)?String(t):d.toLocaleString(undefined,{year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
 function renderProfilePage(){
- const user=S.me&&S.me.user||{},name=typeof user.name==="string"&&user.name.trim()?user.name.trim():null;
- const username=typeof user.username==="string"&&user.username.trim()?user.username.trim():null;
- const email=typeof user.email==="string"&&user.email.trim()?user.email.trim():null;
- const role=typeof user.role==="string"&&user.role.trim()?user.role.trim():null;
- const initials=(name||username||email||"?").split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join("")||"?";
- const value=(text,available)=>h("div",{class:"profile-value"+(available?"":" unavailable")},available?text:"Unavailable");
- const row=(label,text,available)=>h("div",{class:"profile-row"},h("div",{class:"profile-label"},label),value(text,available));
+ const root=h("div",{class:"profile-page"});
  const status=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
- const edit=h("form",{class:"profile-form",hidden:true});
- const emailInput=h("input",{id:"profile-email",name:"email",type:"email",autocomplete:"email",required:true,value:email||""});
- const usernameInput=h("input",{id:"profile-username",name:"username",type:"text",autocomplete:"username",minlength:"3",required:true,value:username||""});
+ const say=(el,msg,kind)=>{el.className="profile-feedback"+(kind?" is-"+kind:"");el.textContent=msg||""};
+ const head=h("section",{class:"profile-header card"}),details=h("div",{class:"profile-details"});
+ const username=h("input",{id:"profile-username",name:"username",type:"text",autocomplete:"username",minlength:"3",required:true});
  const editStatus=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
- const editCancel=h("button",{class:"btn",type:"button",onclick:()=>{emailInput.value=email||"";usernameInput.value=username||"";editStatus.textContent="";edit.hidden=true}},"Cancel");
- const editSave=h("button",{class:"btn primary",type:"submit"},"Save changes");
- edit.append(h("div",{class:"profile-edit-grid"},
-  h("div",{class:"fld"},h("label",{for:"profile-email"},"Email address"),emailInput),
-  h("div",{class:"fld"},h("label",{for:"profile-username"},"Username"),usernameInput)),
-  h("div",{class:"profile-form-actions"},editCancel,editSave),editStatus);
- edit.addEventListener("submit",event=>{event.preventDefault();editStatus.className="profile-feedback is-error";editStatus.textContent="";
-  emailInput.setCustomValidity(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value.trim())?"":"Enter a valid email address.");
-  usernameInput.setCustomValidity(usernameInput.value.trim()?"":"Enter a username.");
-  if(!edit.reportValidity()){editStatus.textContent="Check the highlighted fields.";return}
-  editStatus.className="profile-feedback is-notice";editStatus.textContent="Profile updates are not connected yet. No changes were saved.";
- });
- emailInput.addEventListener("input",()=>emailInput.setCustomValidity(""));
- usernameInput.addEventListener("input",()=>usernameInput.setCustomValidity(""));
- const editButton=h("button",{class:"btn sm",type:"button","aria-expanded":"false",onclick:()=>{const opening=edit.hidden;edit.hidden=!opening;editButton.setAttribute("aria-expanded",String(opening));status.textContent="";if(opening)emailInput.focus()}},"Edit profile");
-
- const passwordForm=h("form",{class:"profile-form",hidden:true});
+ const edit=h("form",{class:"profile-form",hidden:true});
+ const editCancel=h("button",{class:"btn",type:"button"},"Cancel"),editSave=h("button",{class:"btn primary",type:"submit"},"Save username");
+ edit.append(h("div",{class:"profile-edit-grid"},h("div",{class:"fld"},h("label",{for:"profile-username"},"Username"),username)),h("div",{class:"profile-form-actions"},editCancel,editSave),editStatus);
+ const editButton=h("button",{class:"btn sm",type:"button","aria-expanded":"false"},"Change username");
  const currentPassword=h("input",{id:"profile-current-password",name:"current-password",type:"password",autocomplete:"current-password",required:true});
  const newPassword=h("input",{id:"profile-new-password",name:"new-password",type:"password",autocomplete:"new-password",minlength:"8",required:true});
  const confirmPassword=h("input",{id:"profile-confirm-password",name:"confirm-password",type:"password",autocomplete:"new-password",minlength:"8",required:true});
  const passwordStatus=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
- const passwordCancel=h("button",{class:"btn",type:"button",onclick:()=>{passwordForm.reset();passwordStatus.textContent="";passwordForm.hidden=true}},"Cancel");
- const passwordSave=h("button",{class:"btn primary",type:"submit"},"Save password");
+ const passwordForm=h("form",{class:"profile-form",hidden:true});
+ const passwordCancel=h("button",{class:"btn",type:"button"},"Cancel"),passwordSave=h("button",{class:"btn primary",type:"submit"},"Save password");
  passwordForm.append(h("div",{class:"profile-edit-grid"},
-  h("div",{class:"fld"},h("label",{for:"profile-current-password"},"Current password"),currentPassword),
+  h("div",{class:"fld"},h("label",{for:"profile-current-password"},"Current password"),h("div",{class:"password-field"},currentPassword,passwordToggle(currentPassword))),
   h("div",{class:"fld"},h("label",{for:"profile-new-password"},"New password"),h("div",{class:"password-field"},newPassword,passwordToggle(newPassword))),
   h("div",{class:"fld"},h("label",{for:"profile-confirm-password"},"Confirm new password"),h("div",{class:"password-field"},confirmPassword,passwordToggle(confirmPassword))),
   h("p",{class:"password-guidance profile-password-guidance"},"Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.")),
   h("div",{class:"profile-form-actions"},passwordCancel,passwordSave),passwordStatus);
- const passwordCriteria=passwordCriteriaForProfile(newPassword);
- passwordForm.addEventListener("submit",event=>{event.preventDefault();passwordStatus.className="profile-feedback is-error";passwordStatus.textContent="";
-  if(!passwordForm.reportValidity()){passwordStatus.textContent="Check the highlighted fields.";return}
-  if(passwordCriteria.some(test=>!test())){newPassword.setCustomValidity("Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.");newPassword.reportValidity();passwordStatus.textContent="Choose a password that meets the listed requirements.";newPassword.focus();return}
-  if(newPassword.value!==confirmPassword.value){confirmPassword.setCustomValidity("Passwords do not match.");confirmPassword.reportValidity();passwordStatus.textContent="The new passwords do not match.";confirmPassword.focus();return}
-  passwordStatus.className="profile-feedback is-notice";passwordStatus.textContent="Password changes are not connected yet. Your password was not changed.";
-  currentPassword.value="";newPassword.value="";confirmPassword.value="";
+ const passwordButton=h("button",{class:"btn sm",type:"button","aria-expanded":"false"},"Change password");
+ const criteria=passwordCriteriaForProfile(newPassword);
+ let p=null;
+ const row=(label,text)=>h("div",{class:"profile-row"},h("div",{class:"profile-label"},label),h("div",{class:"profile-value"},text));
+ const draw=()=>{
+  const initials=(p.username||p.email||"?").split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join("")||"?";
+  head.replaceChildren(h("div",{class:"profile-avatar","aria-label":"Account initials"},initials),h("div",{class:"profile-header-copy"},h("span",{class:"auth-kicker"},"FRANCHISEOPS AI ACCOUNT"),h("h2",null,p.username),h("p",null,p.email)),h("span",{class:"profile-role"},p.role));
+  details.replaceChildren(row("Username",p.username),row("Email address",p.email),row("Role",p.role),row("Outlet",p.outlet||"All outlets"),row("Joined",fmtTime(p.created_at)),row("Last login",fmtTime(p.last_login)));
+  username.value=p.username;
+ };
+ editButton.onclick=()=>{const open=edit.hidden;edit.hidden=!open;editButton.setAttribute("aria-expanded",String(open));say(editStatus,"");if(open)username.focus()};
+ editCancel.onclick=()=>{username.value=p.username;say(editStatus,"");edit.hidden=true;editButton.setAttribute("aria-expanded","false")};
+ username.addEventListener("input",()=>username.setCustomValidity(""));
+ edit.addEventListener("submit",async event=>{event.preventDefault();say(editStatus,"");
+  username.setCustomValidity(/^[A-Za-z0-9_]{3,}$/.test(username.value.trim())?"":"Use at least 3 letters, numbers, or underscores.");
+  if(!edit.reportValidity()){say(editStatus,"Check the highlighted field.","error");return}
+  editSave.disabled=true;const r=await api("/api/profile/username",{json:{username:username.value.trim()}});editSave.disabled=false;
+  if(!r.ok){say(editStatus,r.msg||"Could not update the username.","error");return}
+  p.username=r.username;S.me.user.username=r.username;draw();say(editStatus,"Username updated.","notice");toast("Username updated.");
  });
- for(const field of [currentPassword,newPassword,confirmPassword])field.addEventListener("input",()=>field.setCustomValidity(""));
- const passwordButton=h("button",{class:"btn sm",type:"button","aria-expanded":"false",onclick:()=>{const opening=passwordForm.hidden;passwordForm.hidden=!opening;passwordButton.setAttribute("aria-expanded",String(opening));status.textContent="";if(opening)currentPassword.focus()}},"Change password");
- const account=h("section",{class:"card profile-card","aria-labelledby":"profile-account-title"},
-  h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-account-title"},"Account information"),h("p",null,"Details currently supplied to the frontend."))),
-  h("div",{class:"profile-details"},
-   row("Full name",null,false),row("Email address",email,!!email),row("Username",username,!!username),row("Assigned role",role,!!role),row("Outlet / franchise",null,false),row("Account created",null,false)),
-  h("div",{class:"profile-pending"},h("span",{class:"dot a","aria-hidden":"true"}),"Profile changes are unavailable until backend profile APIs are provided."));
- const editCard=h("section",{class:"card profile-card","aria-labelledby":"profile-edit-title"},
-  h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-edit-title"},"Edit profile"),h("p",null,"Review available fields and save after profile updates are connected.")),editButton),
-  edit,status);
- const securityCard=h("section",{class:"card profile-card","aria-labelledby":"profile-security-title"},
-  h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-security-title"},"Security"),h("p",null,"Change your password after secure account APIs are available.")),passwordButton),
-  passwordForm);
- return h("div",{class:"profile-page"},
-  h("section",{class:"profile-header card"},
-   h("div",{class:"profile-avatar","aria-label":"Account initials"},initials),
-   h("div",{class:"profile-header-copy"},h("span",{class:"auth-kicker"},"FRANCHISEOPS AI ACCOUNT"),h("h2",null,name||"Full name unavailable"),h("p",null,email||"Email unavailable")),
-   h("span",{class:"profile-role"},role||"Role unavailable")),
-  account,editCard,securityCard);
+ passwordButton.onclick=()=>{const open=passwordForm.hidden;passwordForm.hidden=!open;passwordButton.setAttribute("aria-expanded",String(open));say(passwordStatus,"");if(open)currentPassword.focus()};
+ passwordCancel.onclick=()=>{passwordForm.reset();say(passwordStatus,"");passwordForm.hidden=true;passwordButton.setAttribute("aria-expanded","false")};
+ for(const f of [currentPassword,newPassword,confirmPassword])f.addEventListener("input",()=>f.setCustomValidity(""));
+ passwordForm.addEventListener("submit",async event=>{event.preventDefault();say(passwordStatus,"");
+  if(!passwordForm.reportValidity()){say(passwordStatus,"Check the highlighted fields.","error");return}
+  if(criteria.some(test=>!test())){say(passwordStatus,"Choose a password that meets the listed requirements.","error");newPassword.focus();return}
+  if(newPassword.value!==confirmPassword.value){confirmPassword.setCustomValidity("Passwords do not match.");confirmPassword.reportValidity();say(passwordStatus,"The new passwords do not match.","error");return}
+  passwordSave.disabled=true;const r=await api("/api/profile/password",{json:{current_password:currentPassword.value,new_password:newPassword.value,confirm_password:confirmPassword.value}});passwordSave.disabled=false;
+  if(!r.ok){say(passwordStatus,r.msg||"Could not change the password.","error");return}
+  setToken(r.token,!!localStorage.getItem("fo_token"));passwordForm.reset();passwordForm.hidden=true;passwordButton.setAttribute("aria-expanded","false");say(status,"Password changed. Other sessions were signed out.","notice");toast("Password changed.");
+ });
+ const account=h("section",{class:"card profile-card","aria-labelledby":"profile-account-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-account-title"},"Account information"),h("p",null,"Your details. Your password hash is never shown."))),details);
+ const editCard=h("section",{class:"card profile-card","aria-labelledby":"profile-edit-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-edit-title"},"Username"),h("p",null,"Pick the name shown in the workspace.")),editButton),edit);
+ const securityCard=h("section",{class:"card profile-card","aria-labelledby":"profile-security-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-security-title"},"Security"),h("p",null,"Enter your current password to set a new one.")),passwordButton),passwordForm,status);
+ root.append(head,account,editCard,securityCard);
+ head.replaceChildren(h("div",{class:"boot"},h("div",{class:"spin"}),"Loading your profile…"));
+ api("/api/profile").then(r=>{if(!r.profile){head.replaceChildren(h("div",{class:"callout error"},r.msg||"Could not load your profile."));return}p=r.profile;draw()});
+ return root;
 }
 function passwordCriteriaForProfile(input){
  return[()=>input.value.length>=8,()=>/[A-Z]/.test(input.value),()=>/[a-z]/.test(input.value),()=>/[0-9]/.test(input.value),()=>/[!@#$%^&*(),.?":{}|<>~`_+=/\\[\];'-]/.test(input.value)];
 }
 function renderAdminDashboard(){
  const root=h("div",{class:"admin-dashboard"});
- const notice=h("div",{class:"callout info admin-integration-note"},h("span",null,"Admin data and actions are not connected. No user records or sample metrics are displayed."));
- const kpis=h("section",{class:"admin-kpis","aria-label":"Administration overview"},
-  ...[["Total Users","User totals will appear when backend data is available."],["Active Users","Activity status will appear when backend data is available."],["Roles","Role data will appear when backend data is available."],["Recent Activities","Latest 50 activity records are not available yet."]].map(([label,detail])=>h("article",{class:"kpi"},h("div",{class:"l"},label),h("div",{class:"v","aria-label":label+" unavailable"},"—"),h("div",{class:"s"},detail))));
- const search=h("input",{class:"admin-search",type:"search",placeholder:"Search users (unavailable until user data is connected)", "aria-label":"Search users",oninput:()=>{emptyMessage.textContent=search.value.trim()?"No matching users. User records are not connected yet.":"No user records are available.";emptyMessage.hidden=false}});
- const emptyMessage=h("div",{class:"admin-empty",role:"status"},"No user records are available.");
- const addForm=h("form",{class:"admin-add-form",hidden:true,novalidate:true,"aria-labelledby":"admin-add-title"});
- const fullName=h("input",{id:"admin-user-name",name:"name",type:"text",autocomplete:"name",required:true});
- const email=h("input",{id:"admin-user-email",name:"email",type:"email",autocomplete:"email",required:true});
- const username=h("input",{id:"admin-user-username",name:"username",type:"text",autocomplete:"username",minlength:"3",required:true});
- const role=h("select",{id:"admin-user-role",name:"role",disabled:true},h("option",{value:""},"Role options load from the backend"));
+ let data=null,query="",pendingDelete=null;
+ const kpis=h("section",{class:"admin-kpis","aria-label":"Administration overview"});
+ const roleCard=h("section",{class:"card admin-card","aria-labelledby":"admin-roles-title"});
+ const userSection=h("section",{class:"card admin-card","aria-labelledby":"admin-users-title"});
+ const activitySection=h("section",{class:"card admin-card","aria-labelledby":"admin-activity-title"});
+ const matrixSection=h("section",{class:"card admin-card","aria-labelledby":"admin-matrix-title"});
  const formStatus=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
- for(const field of [fullName,email,username])field.addEventListener("input",()=>field.setCustomValidity(""));
- addForm.addEventListener("submit",event=>{
-  event.preventDefault();formStatus.className="profile-feedback";formStatus.textContent="";
-  fullName.setCustomValidity(fullName.value.trim()?"":"Enter the user's full name.");
-  email.setCustomValidity(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())?"":"Enter a valid email address.");
-  username.setCustomValidity(/^[A-Za-z0-9_]{3,}$/.test(username.value.trim())?"":"Use at least 3 letters, numbers, or underscores for the username.");
-  if(!addForm.reportValidity()){formStatus.classList.add("is-error");formStatus.textContent="Check the highlighted fields.";return}
-  formStatus.classList.add("is-notice");formStatus.textContent="Details are valid locally, but user creation is not connected. No user was created.";
+ const say=(msg,kind)=>{formStatus.className="profile-feedback"+(kind?" is-"+kind:"");formStatus.textContent=msg||""};
+ const act=async(path,body)=>{const r=await api(path,{json:body||{}});if(r.ok){toast(r.msg);await load()}else toast(r.msg||"That action failed.",true);return r};
+ const kpi=(label,value,sub,tone)=>h("article",{class:"kpi "+(tone||"")},h("div",{class:"l"},label),h("div",{class:"v"},String(value)),h("div",{class:"s"},sub));
+ const table=(heads,rows,empty)=>h("div",{class:"tbl admin-table"},h("table",null,h("thead",null,h("tr",null,...heads.map(x=>h("th",null,x)))),h("tbody",null,...(rows.length?rows:[h("tr",null,h("td",{colspan:String(heads.length)},h("div",{class:"admin-empty",role:"status"},empty)))]))));
+ // ---- add user form
+ const email=h("input",{id:"admin-user-email",name:"email",type:"email",autocomplete:"off",required:true});
+ const username=h("input",{id:"admin-user-username",name:"username",type:"text",autocomplete:"off",minlength:"3",required:true});
+ const pass=h("input",{id:"admin-user-password",name:"password",type:"password",autocomplete:"new-password",minlength:"8",required:true});
+ const role=h("select",{id:"admin-user-role",name:"role",required:true});
+ const outlet=h("select",{id:"admin-user-outlet",name:"outlet"});
+ const outletField=h("div",{class:"fld",hidden:true},h("label",{for:"admin-user-outlet"},"Outlet"),outlet);
+ const addForm=h("form",{class:"admin-add-form",hidden:true,novalidate:true,"aria-labelledby":"admin-add-title"});
+ const syncOutlet=()=>{const need=data&&data.scoped_roles.includes(role.value);outletField.hidden=!need;outlet.required=!!need;if(!need)outlet.value=""};
+ role.addEventListener("change",syncOutlet);
+ addForm.append(h("div",{class:"admin-editor-heading"},h("div",null,h("h3",{id:"admin-add-title"},"Add user"),h("p",null,"The user signs in with the temporary password and should change it in their profile."))),
+  h("div",{class:"admin-form-grid"},h("div",{class:"fld"},h("label",{for:"admin-user-email"},"Email address"),email),h("div",{class:"fld"},h("label",{for:"admin-user-username"},"Username"),username),
+   h("div",{class:"fld"},h("label",{for:"admin-user-password"},"Temporary password"),h("div",{class:"password-field"},pass,passwordToggle(pass))),h("div",{class:"fld"},h("label",{for:"admin-user-role"},"Role"),role),outletField),
+  formStatus,h("div",{class:"admin-form-footer"},h("span",{class:"sub"},"The same email and password rules as signup apply."),h("div",{class:"profile-form-actions"},
+   h("button",{class:"btn",type:"button",onclick:()=>{addForm.reset();say("");addForm.hidden=true;syncOutlet()}},"Close"),h("button",{class:"btn primary",type:"submit"},"Create user"))));
+ addForm.addEventListener("submit",async event=>{event.preventDefault();say("");
+  if(!addForm.reportValidity()){say("Check the highlighted fields.","error");return}
+  const r=await api("/api/admin/users",{json:{email:email.value.trim(),username:username.value.trim(),password:pass.value,role:role.value,outlet:outlet.value}});
+  if(!r.ok){say(r.msg||"Could not create the user.","error");return}
+  toast(r.msg);addForm.reset();addForm.hidden=true;syncOutlet();await load();
  });
- const formClose=h("button",{class:"btn",type:"button",onclick:()=>{addForm.reset();formStatus.textContent="";formStatus.className="profile-feedback";addForm.hidden=true;addButton.focus()}},"Close");
- const formCheck=h("button",{class:"btn primary",type:"submit"},"Validate details");
- addForm.append(h("div",{class:"admin-editor-heading"},h("div",null,h("h3",{id:"admin-add-title"},"Add user"),h("p",null,"Fields and role options require confirmation from the backend team."))),
-  h("div",{class:"admin-form-grid"},
-   h("div",{class:"fld"},h("label",{for:"admin-user-name"},"Full name"),fullName),
-   h("div",{class:"fld"},h("label",{for:"admin-user-email"},"Email address"),email),
-   h("div",{class:"fld"},h("label",{for:"admin-user-username"},"Username"),username),
-   h("div",{class:"fld"},h("label",{for:"admin-user-role"},"Role"),role)),
-  formStatus,h("div",{class:"admin-form-footer"},h("span",{class:"sub"},"Validation is local only; nothing is submitted."),h("div",{class:"profile-form-actions"},formCheck,formClose)));
- const addButton=h("button",{class:"btn primary",type:"button",onclick:()=>{addForm.hidden=false;fullName.focus()}},"Add user");
- const actionButtons=h("div",{class:"admin-row-actions","aria-label":"User actions unavailable until records are loaded"},
-  h("button",{class:"btn sm",type:"button",disabled:true,title:"Select a backend-provided user record first."},"Edit role"),
-  h("button",{class:"btn sm",type:"button",disabled:true,title:"Select a backend-provided user record first."},"Lock / unlock"),
-  h("button",{class:"btn sm danger",type:"button",disabled:true,title:"Select a backend-provided user record first; deletion requires confirmation."},"Delete"));
- const userTable=h("div",{class:"tbl admin-table"},h("table",null,
-  h("thead",null,h("tr",null,...["Name","Email","Username","Role","Status","Actions"].map(label=>h("th",null,label)))),
-  h("tbody",null,h("tr",null,h("td",{colspan:"6"},emptyMessage)))));
- const userSection=h("section",{class:"card admin-card","aria-labelledby":"admin-users-title"},
-  h("div",{class:"admin-section-heading"},h("div",null,h("h2",{id:"admin-users-title"},"User Management"),h("p",null,"Manage access when user-management data and operations are connected.")),addButton),
-  h("div",{class:"admin-user-toolbar"},search,actionButtons),addForm,userTable,
-  h("div",{class:"admin-pending-note"},"Edit, role changes, lock/unlock, and deletion are unavailable until backend user records and permissions are provided."),
-  h("details",{class:"admin-delete-preview"},h("summary",null,"Delete confirmation"),h("div",{class:"admin-delete-copy"},h("p",null,"Deleting a user is a destructive action. Select a backend-provided user to review its details before confirming."),h("button",{class:"btn danger",type:"button",disabled:true},"Confirm delete"))));
- const activityEmpty=h("div",{class:"admin-empty",role:"status"},"No activity records are available.");
- const activityTable=h("div",{class:"tbl admin-table"},h("table",null,
-  h("thead",null,h("tr",null,...["Time","Actor","Activity","Target","Result"].map(label=>h("th",null,label)))),
-  h("tbody",null,h("tr",null,h("td",{colspan:"5"},activityEmpty)))));
- const activitySection=h("section",{class:"card admin-card","aria-labelledby":"admin-activity-title"},
-  h("div",{class:"admin-section-heading"},h("div",null,h("h2",{id:"admin-activity-title"},"Activity Log"),h("p",null,"Latest 50 activities"))),
-  activityTable,
-  h("div",{class:"admin-pending-note"},"Activity log data is not connected; no events are fabricated."));
- root.append(notice,kpis,userSection,activitySection);
+ const addButton=h("button",{class:"btn primary",type:"button",onclick:()=>{addForm.hidden=false;email.focus()}},"Add user");
+ const search=h("input",{class:"admin-search",type:"search",placeholder:"Search users by email, username, role or outlet","aria-label":"Search users",oninput:()=>{query=search.value.trim().toLowerCase();drawUsers()}});
+ // ---- users table
+ const roleCell=u=>{
+  const me=data.me===u.id;const sel=h("select",{class:"in admin-role-select","aria-label":"Role of "+u.username,disabled:me,title:me?"You cannot change your own role.":""},...data.roles.map(r=>h("option",{value:r,selected:r===u.role},r)));
+  sel.addEventListener("change",async()=>{
+   let o="";if(data.scoped_roles.includes(sel.value)){o=u.outlet||"";if(!o){o=(prompt("Outlet for the "+sel.value+" role (for example "+data.outlets[0]+"):",data.outlets[0])||"").trim().toUpperCase();if(!o){sel.value=u.role;return}}}
+   const r=await act("/api/admin/users/"+u.id+"/role",{role:sel.value,outlet:o});if(!r.ok)sel.value=u.role;
+  });return sel};
+ const outletCell=u=>{
+  if(!data.scoped_roles.includes(u.role))return h("span",{class:"sub",style:"margin:0"},"All outlets");
+  const sel=h("select",{class:"in admin-role-select","aria-label":"Outlet of "+u.username},...data.outlets.map(x=>h("option",{value:x,selected:x===u.outlet},x)));
+  sel.addEventListener("change",async()=>{const r=await act("/api/admin/users/"+u.id+"/role",{role:u.role,outlet:sel.value});if(!r.ok)sel.value=u.outlet});return sel};
+ const actionsCell=u=>{
+  const me=data.me===u.id;
+  if(pendingDelete===u.id)return h("div",{class:"admin-row-actions"},h("span",{class:"sub",style:"margin:0 6px 0 0"},"Delete "+u.username+"?"),h("button",{class:"btn sm danger",type:"button",onclick:async()=>{pendingDelete=null;await act("/api/admin/users/"+u.id+"/delete",{confirm:true})}},"Confirm delete"),h("button",{class:"btn sm",type:"button",onclick:()=>{pendingDelete=null;drawUsers()}},"Cancel"));
+  return h("div",{class:"admin-row-actions"},
+   h("button",{class:"btn sm",type:"button",disabled:me&&!u.locked,title:me?"You cannot lock your own account.":"",onclick:()=>act("/api/admin/users/"+u.id+(u.locked?"/unlock":"/lock"))},u.locked?"Unlock":"Lock"),
+   h("button",{class:"btn sm danger",type:"button",disabled:me,title:me?"You cannot delete your own account.":"",onclick:()=>{pendingDelete=u.id;drawUsers()}},"Delete"));
+ };
+ const drawUsers=()=>{
+  if(!data)return;const rows=data.users.filter(u=>!query||[u.email,u.username,u.role,u.outlet||""].join(" ").toLowerCase().includes(query)).map(u=>
+   h("tr",null,h("td",null,u.email),h("td",null,u.username+(data.me===u.id?" (you)":"")),h("td",null,roleCell(u)),h("td",null,outletCell(u)),
+    h("td",null,h("span",{class:"pill",style:"color:"+(u.locked?"#cd2b31":"#0b7a6c")+";border-color:currentColor"},u.locked?"Locked":"Active")),h("td",null,fmtTime(u.created_at)),h("td",null,fmtTime(u.last_login)),h("td",null,actionsCell(u))));
+  userTable.replaceChildren(table(["Email","Username","Role","Outlet","Status","Created","Last login","Actions"],rows,query?"No users match your search.":"No users yet."));
+ };
+ const userTable=h("div",null);
+ userSection.append(h("div",{class:"admin-section-heading"},h("div",null,h("h2",{id:"admin-users-title"},"User management"),h("p",null,"Promote or demote with the role drop-down. A locked user is signed out at once.")),addButton),h("div",{class:"admin-user-toolbar"},search),addForm,userTable);
+ const draw=()=>{
+  const k=data.kpis;
+  kpis.replaceChildren(kpi("Total users",k.total,"registered accounts"),kpi("Active users",k.active,"can sign in"),kpi("Locked users",k.locked,"blocked from signing in",k.locked?"Warning":""),kpi("Roles in use",Object.values(k.per_role).filter(n=>n>0).length,"of "+data.roles.length+" roles"));
+  roleCard.replaceChildren(h("div",{class:"admin-section-heading"},h("div",null,h("h2",{id:"admin-roles-title"},"Users per role"),h("p",null,"How many accounts hold each role."))),
+   h("div",{class:"admin-row-actions"},...data.roles.map(r=>h("span",{class:"chip"},r+": ",h("b",null,String(k.per_role[r]||0))))));
+  role.replaceChildren(h("option",{value:""},"Choose a role"),...data.roles.map(r=>h("option",{value:r},r)));
+  outlet.replaceChildren(h("option",{value:""},"Choose an outlet"),...data.outlets.map(x=>h("option",{value:x},x)));syncOutlet();
+  drawUsers();
+  activitySection.replaceChildren(h("div",{class:"admin-section-heading"},h("div",null,h("h2",{id:"admin-activity-title"},"Activity log"),h("p",null,"Latest "+data.activity.length+" actions: who, what and when."))),
+   table(["Time","Who","Action","Target","Detail"],data.activity.map(a=>h("tr",null,h("td",null,fmtTime(a.ts)),h("td",null,a.actor),h("td",null,h("span",{class:"pill",style:"color:#3451b2;border-color:currentColor"},String(a.event).replace(/_/g," "))),h("td",null,a.target),h("td",null,a.detail))),"No activity recorded yet."));
+  const cols=Object.keys(data.matrix[0]);
+  matrixSection.replaceChildren(h("div",{class:"admin-section-heading"},h("div",null,h("h2",{id:"admin-matrix-title"},"Roles and privileges"),h("p",null,"What each role can open and do. Enforced on the server, not only in the menu."))),
+   table(cols,data.matrix.map(r=>h("tr",null,...cols.map(c=>h("td",{style:c==="Role"?"font-weight:600":"text-align:center;color:"+(r[c]==="✓"?"#0b7a6c":"#cd2b31")},r[c])))),"No roles."));
+ };
+ const load=async()=>{
+  const d=await api("/api/admin/overview");
+  if(!d.users){root.replaceChildren(h("div",{class:"callout error"},d.msg||"Could not load the admin dashboard."));return}
+  data=d;data.me=S.me&&S.me.user&&S.me.user.id;draw();
+ };
+ root.append(kpis,roleCard,userSection,activitySection,matrixSection);
+ kpis.replaceChildren(h("div",{class:"boot"},h("div",{class:"spin"}),"Loading the dashboard…"));load();
  return root;
 }
 async function loadPage(silent){const seq=++S.seq;clearTimeout(S.timer);if(S.page==="profile"||S.page==="admin"){S.tab=null;S.params={};S.live=0;const profile=S.page==="profile";$("#ttl").textContent=profile?"My Profile":"Admin Dashboard";$("#sub").textContent=profile?"Account details and security":"Users, access, and recent activity";document.title=(profile?"My Profile":"Admin Dashboard")+" · "+S.me.name;$("#tabs").replaceChildren();$("#tabs").style.display="none";$("#acts").replaceChildren();$("#blocks").replaceChildren(profile?renderProfilePage():renderAdminDashboard());return}const q=new URLSearchParams();if(S.tab)q.set("tab",S.tab);if(Object.keys(S.params).length)q.set("p",JSON.stringify(S.params));
@@ -348,8 +373,8 @@ UI.palette=()=>{if($(".kpal"))return;let sel=0,rows=[];const inp=h("input",{plac
  document.addEventListener("keydown",kd,true);inp.addEventListener("input",()=>{sel=0;build()});document.body.append(ov);build();inp.focus()};
 document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="k"&&S.me){e.preventDefault();UI.palette()}});
 function updBadges(){const p=S.pulse;if(!p)return;const cc=$('.nav[data-id="command"] .bd');if(cc){const n=p.critical;cc.style.display=n?"":"none";cc.textContent=n;cc.className="bd"}const ap=$('.nav[data-id="approvals"] .bd');if(ap){const n=p.proposed;ap.style.display=n?"":"none";ap.textContent=n;ap.className="bd a"}
- const g=p.gpu||{};$("#gpu").innerHTML=`<span class="dot ${g.cuda?"g":"r"}"></span>${g.cuda?esc(g.name||"GPU")+" · "+g.used+"/"+g.total+" GB":"NO GPU"} · LLM ${g.llm==="downloading"?"downloading "+(g.llm_done||0)+"/"+(g.llm_total||"?")+" GB":g.llm} · NLLB ${g.nllb}${g.tok_s?" · "+g.tok_s+" tok/s":""}`;
- $("#hl").innerHTML=`<span class="dot g live"></span>live · health ${p.health==null?"–":Math.round(p.health)} · open ${p.open} · crit ${p.critical} · cycle ${p.cycles}`;$("#warn").style.display=g.cuda?"none":"";if(!p.worker_alive)$("#hl").innerHTML+=' · <b style="color:#e5484d">worker down</b>'}
+ const g=p.gpu||{};$("#gpu").style.display="none";
+ $("#hl").innerHTML=`<span class="dot g live"></span>live · health ${p.health==null?"–":Math.round(p.health)} · open ${p.open} · crit ${p.critical} · cycle ${p.cycles}`;$("#warn").style.display="none";if(!p.worker_alive)$("#hl").innerHTML+=' · <b style="color:#e5484d">worker down</b>'}
 function openStream(){if(S.es)S.es.close();const es=new EventSource("/api/stream");S.es=es;es.onmessage=e=>{const p=JSON.parse(e.data);if(p.error)return;const old=S.pulse;S.pulse=p;updBadges();if(old&&p.dec!==old.dec&&S.live)loadPage(true)};es.onerror=()=>{}}
 // ---------------------------------------------------------------- auth screens
 function passwordToggle(input){
@@ -385,6 +410,7 @@ function renderLogin(){
  const app=$("#app");app.classList.add("auth-shell");S.authScreen="login";
  const status=h("p",{class:"login-status",role:"status","aria-live":"polite"},S.apiNotice);
  if(S.apiNotice)status.classList.add("is-error");
+ if(S.loginNotice){status.textContent=S.loginNotice;status.className="login-status is-notice";S.loginNotice=""}
  const email=h("input",{id:"login-identity",name:"identity",type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",required:true});
  const password=h("input",{id:"login-password",name:"password",type:"password",autocomplete:"current-password",required:true});
  const toggle=passwordToggle(password);
@@ -393,12 +419,16 @@ function renderLogin(){
  UI.setLoginLoading=loading=>{submit.disabled=loading;submit.setAttribute("aria-busy",String(loading));spinner.hidden=!loading;submitLabel.textContent=loading?"Signing in...":"Sign in"};
  email.addEventListener("input",()=>email.setCustomValidity(""));
  password.addEventListener("input",()=>password.setCustomValidity(""));
- const unavailable=event=>{
-  event.preventDefault();status.className="login-status is-error";status.textContent="";
+ const unavailable=async event=>{
+  event.preventDefault();status.className="login-status";status.textContent="";
   email.setCustomValidity(email.value.trim()?"":"Enter your email or username.");
   password.setCustomValidity(password.value?"":"Enter your password.");
-  if(!event.currentTarget.reportValidity()){status.textContent="Enter your email or username and password.";return}
-  status.textContent="Authentication is not connected yet. No credentials were submitted.";
+  if(!event.currentTarget.reportValidity()){status.className="login-status is-error";status.textContent="Enter your email or username and password.";return}
+  UI.setLoginLoading(true);
+  const r=await api("/api/auth/login",{json:{identity:email.value.trim(),password:password.value}});
+  UI.setLoginLoading(false);
+  if(r.ok&&r.token){setToken(r.token,$("#remember-me").checked);S.me=null;S.apiNotice="";render();return}
+  status.className="login-status is-error";status.textContent=r.msg||"Could not sign in.";password.value="";password.focus();
  };
  const showSignup=event=>{event.preventDefault();S.authScreen="signup";renderSignup()};
  const showForgot=event=>{event.preventDefault();S.authScreen="forgot";renderForgotPassword()};
@@ -415,11 +445,20 @@ function renderSignup(){
  clearInterval(S.otpCountdown);S.otpCountdown=null;
  const app=$("#app");app.classList.add("auth-shell");S.authScreen="signup";
  const status=h("p",{class:"signup-status","role":"status","aria-live":"polite"});
- const fullName=h("input",{id:"signup-name",name:"name",type:"text",autocomplete:"name",required:true});
  const email=h("input",{id:"signup-email",name:"email",type:"email",autocomplete:"email",autocapitalize:"none",spellcheck:"false",required:true});
  const username=h("input",{id:"signup-username",name:"username",type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",minlength:"3",required:true});
- const role=h("select",{id:"signup-role",name:"role",disabled:true,"aria-describedby":"signup-access-guidance"},h("option",{value:""},"Role options unavailable"));
- const outlet=h("select",{id:"signup-outlet",name:"outlet",disabled:true,"aria-describedby":"signup-access-guidance"},h("option",{value:""},"Outlet options unavailable"));
+ const role=h("select",{id:"signup-role",name:"role",required:true,"aria-describedby":"signup-access-guidance"},h("option",{value:""},"Loading roles…"));
+ const outlet=h("select",{id:"signup-outlet",name:"outlet","aria-describedby":"signup-access-guidance"},h("option",{value:""},"Loading outlets…"));
+ const outletField=h("div",{class:"fld",hidden:true},h("label",{for:"signup-outlet"},"Your outlet"),outlet);
+ let scoped=[];
+ const syncOutlet=()=>{const need=scoped.includes(role.value);outletField.hidden=!need;outlet.required=need;if(!need)outlet.value=""};
+ role.addEventListener("change",syncOutlet);
+ api("/api/auth/options").then(o=>{
+  if(!o.roles){status.className="signup-status is-error";status.textContent=o.msg||"Could not load the role list. Refresh the page.";return}
+  scoped=o.scoped_roles||[];
+  role.replaceChildren(h("option",{value:""},"Choose your role"),...o.roles.map(r=>h("option",{value:r},r)));
+  outlet.replaceChildren(h("option",{value:""},"Choose your outlet"),...o.outlets.map(x=>h("option",{value:x},x)));syncOutlet();
+ });
  const password=h("input",{id:"signup-password",name:"password",type:"password",autocomplete:"new-password",minlength:"8",required:true,"aria-describedby":"signup-strength signup-guidance"});
  const confirm=h("input",{id:"signup-confirm",name:"confirm-password",type:"password",autocomplete:"new-password",minlength:"8",required:true});
  const strengthText=h("span",{class:"strength-label","aria-hidden":"true"},"Enter a password");
@@ -428,34 +467,36 @@ function renderSignup(){
  const updateStrength=()=>updatePasswordStrength(password,meter,strengthFill,strengthText,criteria);
  password.addEventListener("input",()=>{password.setCustomValidity("");updateStrength()});
  username.addEventListener("input",()=>username.setCustomValidity(""));
- fullName.addEventListener("input",()=>fullName.setCustomValidity(""));
  confirm.addEventListener("input",()=>confirm.setCustomValidity(""));
  const togglePassword=passwordToggle(password),toggleConfirm=passwordToggle(confirm);
+ const submit=authSubmitButton("Create account","Creating account...");
  const validationMessage=message=>{status.className="signup-status is-error";status.textContent=message};
- const submit=event=>{
+ const onSubmit=async event=>{
   event.preventDefault();status.className="signup-status";status.textContent="";
-  fullName.setCustomValidity(fullName.value.trim()?"":"Enter your full name.");
   username.setCustomValidity(/^[A-Za-z0-9_]{3,}$/.test(username.value.trim())?"":"Use at least 3 letters, numbers, or underscores for your username.");
-  if(!event.currentTarget.reportValidity()){status.className="signup-status is-error";status.textContent="Please check the highlighted fields.";return}
-  const checks=criteria.map(test=>test());
-  if(checks.some(ok=>!ok)){validationMessage("Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.");password.focus();return}
+  if(!event.currentTarget.reportValidity()){validationMessage("Please check the highlighted fields.");return}
+  if(!role.value){validationMessage("Choose your role.");role.focus();return}
+  if(criteria.map(test=>test()).some(ok=>!ok)){validationMessage("Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.");password.focus();return}
   if(password.value!==confirm.value){confirm.setCustomValidity("Passwords do not match.");confirm.reportValidity();validationMessage("The passwords do not match.");confirm.focus();return}
-  status.className="signup-status is-notice";status.textContent="Account creation is not connected yet. No account was created and no information was sent.";
+  submit.setLoading(true);
+  const r=await api("/api/auth/signup",{json:{email:email.value.trim(),username:username.value.trim(),password:password.value,confirm_password:confirm.value,role:role.value,outlet:outlet.value}});
+  submit.setLoading(false);
+  if(r.ok){S.loginNotice="Account created. Sign in with your new account.";S.authScreen="login";renderLogin();return}
+  validationMessage(r.msg||"Could not create the account.");
  };
  const backToLogin=event=>{event.preventDefault();S.authScreen="login";renderLogin()};
- const form=h("form",{class:"auth auth-form signup-form",novalidate:true,onsubmit:submit},
+ const form=h("form",{class:"auth auth-form signup-form",novalidate:true,onsubmit:onSubmit},
   h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"FRANCHISE MANAGEMENT PLATFORM"),h("h1",null,"Create your account"),h("p",null,"Set up your access to the FranchiseOps AI workspace.")),
- h("p",{id:"signup-access-guidance",class:"auth-info"},"Role and outlet choices are unavailable until the backend provides registration and option-list APIs. No account information will be submitted."),
- h("div",{class:"fld"},h("label",{for:"signup-name"},"Full name"),fullName),
- h("div",{class:"fld"},h("label",{for:"signup-email"},"Email address"),email),
- h("div",{class:"fld"},h("label",{for:"signup-username"},"Username"),username),
- h("div",{class:"fld"},h("label",{for:"signup-role"},"Assigned role"),role),
- h("div",{class:"fld"},h("label",{for:"signup-outlet"},"Outlet"),outlet),
+  h("p",{id:"signup-access-guidance",class:"auth-info"},"Choose the role you work in; it decides which pages you can open. Store Managers and Staff are limited to their own outlet. An administrator can change your role later, and Admin accounts are created by an administrator only."),
+  h("div",{class:"fld"},h("label",{for:"signup-email"},"Email address"),email),
+  h("div",{class:"fld"},h("label",{for:"signup-username"},"Username"),username),
+  h("div",{class:"fld"},h("label",{for:"signup-role"},"Your role"),role),
+  outletField,
   h("div",{class:"fld"},h("label",{for:"signup-password"},"Password"),h("div",{class:"password-field"},password,togglePassword),
    meter,
    h("p",{id:"signup-guidance",class:"password-guidance"},"Aim for 8+ characters with uppercase and lowercase letters, a number, and a symbol.")),
   h("div",{class:"fld"},h("label",{for:"signup-confirm"},"Confirm password"),h("div",{class:"password-field"},confirm,toggleConfirm)),
-  h("button",{class:"btn primary login-submit",type:"submit"},"Create account"),
+  submit.button,
   status,
   h("p",{class:"signup-prompt"},"Already have an account? ",h("a",{href:"#login",onclick:backToLogin},"Return to login")));
  app.replaceChildren(authShell(form,"Create a FranchiseOps AI account"));
@@ -465,24 +506,23 @@ function renderForgotPassword(){
  const app=$("#app");app.classList.add("auth-shell");S.authScreen="forgot";
  const status=h("p",{class:"auth-feedback","role":"status","aria-live":"polite"});
  const email=h("input",{id:"recovery-email",name:"email",type:"email",autocomplete:"email",autocapitalize:"none",spellcheck:"false",required:true,value:S.recoveryEmail});
- const submit=authSubmitButton("Continue","Continuing...");
- const onSubmit=event=>{
+ const submit=authSubmitButton("Send code","Sending...");
+ const onSubmit=async event=>{
   event.preventDefault();status.className="auth-feedback";status.textContent="";
   email.setCustomValidity(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())?"":"Enter a valid email address.");
   if(!event.currentTarget.reportValidity()){status.classList.add("is-error");status.textContent="Please enter a valid email address.";return}
-  S.recoveryEmail=email.value.trim();S.recoveryOtp="";S.otpResendUntil=Date.now()+30000;S.authScreen="otp";renderOtpVerification();
+  S.recoveryEmail=email.value.trim();submit.setLoading(true);
+  const r=await api("/api/auth/forgot",{json:{email:S.recoveryEmail}});submit.setLoading(false);
+  if(!r.ok){status.classList.add("is-error");status.textContent=r.msg||"Could not send the code.";return}
+  S.recoveryOtp="";S.otpResendUntil=Date.now()+30000;S.otpNotice=r.msg;S.authScreen="otp";renderOtpVerification();
  };
  const back=event=>{event.preventDefault();S.authScreen="login";renderLogin()};
- const toReset=event=>{event.preventDefault();S.authScreen="reset";renderResetPassword()};
  email.addEventListener("input",()=>{email.setCustomValidity("");S.recoveryEmail=email.value});
- UI.setRecoveryLoading=submit.setLoading;
  const form=h("form",{class:"auth auth-form recovery-form",novalidate:true,onsubmit:onSubmit},
-  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Forgot your password?"),h("p",null,"Enter your account email to continue to the verification preview.")),
-  h("div",{class:"auth-info",role:"note"},"Password recovery is awaiting backend integration. Continuing only opens the OTP preview; no email or code will be sent."),
+  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Forgot your password?"),h("p",null,"Enter your account email and we will send you a 6-digit verification code.")),
   h("div",{class:"fld"},h("label",{for:"recovery-email"},"Email address"),email),
   submit.button,status,
-  h("p",{class:"signup-prompt"},h("a",{href:"#login",onclick:back},"Back to login")),
-  h("p",{class:"auth-secondary-link"},"Already have a reset link? ",h("a",{href:"#reset-password",onclick:toReset},"Open the reset form preview")));
+  h("p",{class:"signup-prompt"},h("a",{href:"#login",onclick:back},"Back to login")));
  app.replaceChildren(authShell(form,"Recover your FranchiseOps AI account"));
 }
 function renderOtpVerification(){
@@ -490,42 +530,44 @@ function renderOtpVerification(){
  const app=$("#app");app.classList.add("auth-shell");S.authScreen="otp";
  if(!S.otpResendUntil)S.otpResendUntil=Date.now()+30000;
  const status=h("p",{class:"auth-feedback","role":"status","aria-live":"polite"});
- const emailText=h("b",null,S.recoveryEmail||"Email unavailable");
+ if(S.otpNotice){status.classList.add("is-notice");status.textContent=S.otpNotice;S.otpNotice=""}
+ const emailText=h("b",null,S.recoveryEmail||"your email");
  const code=h("input",{id:"recovery-otp",class:"otp-code",name:"otp",type:"text",inputmode:"numeric",pattern:"[0-9]{6}",minlength:"6",maxlength:"6",autocomplete:"one-time-code",autocapitalize:"off",spellcheck:"false",required:true,value:S.recoveryOtp,"aria-describedby":"otp-guidance"});
- const resend=h("button",{class:"btn otp-resend",type:"button",disabled:true,onclick:()=>{status.className="auth-feedback is-notice";status.textContent="Resend is not connected yet. No OTP was sent."}},"Resend code");
+ const resend=h("button",{class:"btn otp-resend",type:"button",disabled:true,onclick:async()=>{
+  resend.disabled=true;const r=await api("/api/auth/forgot",{json:{email:S.recoveryEmail}});
+  status.className="auth-feedback "+(r.ok?"is-notice":"is-error");status.textContent=r.msg||"Could not resend the code.";
+  S.otpResendUntil=Date.now()+30000;if(!S.otpCountdown)S.otpCountdown=setInterval(updateCountdown,1000);updateCountdown();
+ }},"Resend code");
  const countdown=h("span",{id:"otp-countdown",class:"otp-countdown","aria-live":"off"});
  const submit=authSubmitButton("Verify code","Verifying...");
  const updateCountdown=()=>{
   const remaining=Math.max(0,Math.ceil((S.otpResendUntil-Date.now())/1000));
   resend.disabled=remaining>0;
   resend.textContent=remaining>0?"Resend code ("+String(Math.floor(remaining/60)).padStart(2,"0")+":"+String(remaining%60).padStart(2,"0")+")":"Resend code";
-  countdown.textContent=remaining>0?"Resend control unlocks in "+remaining+" seconds.":"Resend control is available.";
+  countdown.textContent=remaining>0?"You can ask for a new code in "+remaining+" seconds.":"You can ask for a new code now.";
   if(!remaining){clearInterval(S.otpCountdown);S.otpCountdown=null}
  };
  updateCountdown();
  if(S.otpResendUntil>Date.now())S.otpCountdown=setInterval(updateCountdown,1000);
- const onSubmit=event=>{
+ const onSubmit=async event=>{
   event.preventDefault();status.className="auth-feedback";status.textContent="";
   const value=code.value.trim();
   code.setCustomValidity(!value?"Enter the six-digit code.":/^\d{6}$/.test(value)?"":"Enter exactly six digits.");
   if(!event.currentTarget.reportValidity()){
    code.setAttribute("aria-invalid","true");status.classList.add("is-error");status.textContent=!value?"Enter the six-digit code.":"Enter exactly six digits.";return;
   }
-  S.recoveryOtp=value;code.removeAttribute("aria-invalid");
-  status.classList.add("is-notice");status.textContent="OTP verification is not connected. The code was not checked, and your account was not verified.";
+  submit.setLoading(true);const r=await api("/api/auth/verify",{json:{email:S.recoveryEmail,otp:value}});submit.setLoading(false);
+  if(!r.ok){code.setAttribute("aria-invalid","true");status.classList.add("is-error");status.textContent=r.msg||"That code is wrong or has expired.";return}
+  S.recoveryOtp=value;code.removeAttribute("aria-invalid");S.authScreen="reset";renderResetPassword();
  };
  code.addEventListener("input",()=>{S.recoveryOtp=code.value;code.setCustomValidity("");code.removeAttribute("aria-invalid")});
- UI.setOtpLoading=submit.setLoading;
  const back=event=>{event.preventDefault();S.recoveryOtp=code.value;S.authScreen="forgot";renderForgotPassword()};
- const toReset=event=>{event.preventDefault();S.recoveryOtp=code.value;S.authScreen="reset";renderResetPassword()};
  const form=h("form",{class:"auth auth-form recovery-form otp-form",novalidate:true,onsubmit:onSubmit},
-  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Verify your email"),h("p",null,"Enter the six-digit verification code for ",emailText,".")),
-  h("div",{class:"auth-info",role:"note"},"Verification is awaiting backend integration. No OTP was sent, and this screen cannot verify a code."),
-  h("div",{class:"fld"},h("label",{for:"recovery-otp"},"Six-digit verification code"),code,h("p",{id:"otp-guidance",class:"password-guidance"},"Enter six digits. Letters, spaces, and other characters are not accepted.")),
+  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Verify your email"),h("p",null,"Enter the six-digit verification code sent to ",emailText,".")),
+  h("div",{class:"fld"},h("label",{for:"recovery-otp"},"Six-digit verification code"),code,h("p",{id:"otp-guidance",class:"password-guidance"},"The code is valid for 10 minutes. Five wrong codes cancel it.")),
   h("div",{class:"otp-resend-row"},resend,countdown),
   submit.button,status,
-  h("p",{class:"signup-prompt"},h("a",{href:"#forgot-password",onclick:back},"Back to email")),
-  h("p",{class:"auth-secondary-link"},"Continue only to the disconnected reset preview: ",h("a",{href:"#reset-password",onclick:toReset},"Open reset form preview")));
+  h("p",{class:"signup-prompt"},h("a",{href:"#forgot-password",onclick:back},"Back to email")));
  app.replaceChildren(authShell(form,"Verify your FranchiseOps AI recovery code"));
 }
 function renderResetPassword(){
@@ -540,40 +582,41 @@ function renderResetPassword(){
  const updateStrength=()=>updatePasswordStrength(password,meter,strengthFill,strengthText,criteria);
  password.addEventListener("input",()=>{password.setCustomValidity("");updateStrength()});
  confirm.addEventListener("input",()=>confirm.setCustomValidity(""));
- const onSubmit=event=>{
+ const onSubmit=async event=>{
   event.preventDefault();status.className="auth-feedback";status.textContent="";
   if(!event.currentTarget.reportValidity()){status.classList.add("is-error");status.textContent="Please check the highlighted fields.";return}
   if(criteria.some(test=>!test())){password.setCustomValidity("Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.");password.reportValidity();status.classList.add("is-error");status.textContent="Choose a password with at least 8 characters, uppercase and lowercase letters, a number, and a symbol.";password.focus();return}
   if(password.value!==confirm.value){confirm.setCustomValidity("Passwords do not match.");confirm.reportValidity();status.classList.add("is-error");status.textContent="The passwords do not match.";confirm.focus();return}
-  status.classList.add("is-notice");status.textContent="Password reset is not connected yet. Your password was not changed and no information was sent.";
+  submit.setLoading(true);const r=await api("/api/auth/reset",{json:{email:S.recoveryEmail,otp:S.recoveryOtp,password:password.value,confirm_password:confirm.value}});submit.setLoading(false);
+  if(!r.ok){status.classList.add("is-error");status.textContent=r.msg||"Could not reset the password.";return}
+  S.recoveryEmail="";S.recoveryOtp="";S.otpResendUntil=0;S.loginNotice=r.msg;S.authScreen="login";renderLogin();
  };
  const back=event=>{event.preventDefault();S.authScreen="login";renderLogin()};
  const backToOtp=event=>{event.preventDefault();S.authScreen="otp";renderOtpVerification()};
- UI.setResetLoading=submit.setLoading;
  const form=h("form",{class:"auth auth-form recovery-form",novalidate:true,onsubmit:onSubmit},
-  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Choose a new password"),h("p",null,"Enter and confirm your new password to continue.")),
-  h("div",{class:"auth-info",role:"note"},S.recoveryEmail?"Reset preview for "+S.recoveryEmail+". OTP verification is not connected; the code was not checked and your password cannot be changed.":"This reset form is a preview until the backend provides a secure recovery link or verification step."),
+  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Choose a new password"),h("p",null,"Enter and confirm your new password.")),
   h("div",{class:"fld"},h("label",{for:"reset-password"},"New password"),h("div",{class:"password-field"},password,passwordToggle(password)),
    meter,h("p",{id:"reset-guidance",class:"password-guidance"},"Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.")),
   h("div",{class:"fld"},h("label",{for:"reset-confirm"},"Confirm new password"),h("div",{class:"password-field"},confirm,passwordToggle(confirm))),
   submit.button,status,
-  S.recoveryEmail?h("p",{class:"auth-secondary-link"},h("a",{href:"#otp-verification",onclick:backToOtp},"Back to OTP verification")):null,
+  S.recoveryEmail?h("p",{class:"auth-secondary-link"},h("a",{href:"#otp-verification",onclick:backToOtp},"Back to code verification")):null,
   h("p",{class:"signup-prompt"},h("a",{href:"#login",onclick:back},"Back to login")));
  app.replaceChildren(authShell(form,"Reset your FranchiseOps AI password"));
 }
 async function render(){const app=$("#app");if(S.es){S.es.close();S.es=null}
  if(!S.me)app.replaceChildren(h("div",{class:"boot",role:"status"},h("div",{class:"spin","aria-hidden":"true"}),"Connecting to FranchiseOps AI…"));
  const pub=await api("/api/public");S.pub=pub;S.apiNotice=pub.error&&pub.status!==401?pub.msg:"";
- if(!S.me){const m=await api("/api/me");if(m.user){S.me=m;S.apiNotice=""}else if(m.error&&m.status!==401&&!S.apiNotice)S.apiNotice=m.msg}
+ if(!S.me&&authToken()){const m=await api("/api/me");if(m.user){S.me=m;S.apiNotice=""}else if(m.error&&m.status!==401&&!S.apiNotice)S.apiNotice=m.msg}
  if(!S.me){if(S.authScreen==="signup")renderSignup();else if(S.authScreen==="forgot")renderForgotPassword();else if(S.authScreen==="otp")renderOtpVerification();else if(S.authScreen==="reset")renderResetPassword();else renderLogin();return}
  if(Array.isArray(S.me.menu)&&!S.me.menu.some(m=>m.id==="profile"))S.me.menu=[...S.me.menu,{id:"profile",label:"My Profile",icon:"user"}];
  if(Array.isArray(S.me.menu)&&!S.me.menu.some(m=>m.id==="admin")&&String(S.me.user.role||"").toLowerCase()==="admin")S.me.menu=[...S.me.menu,{id:"admin",label:"Admin Dashboard",icon:"shield"}];
  app.classList.remove("auth-shell");
- app.replaceChildren(h("div",{class:"side"},h("div",{class:"brand"},h("i",null,icon("radar")),h("div",null,S.me.name,h("small",null,S.me.user.role+" · "+S.me.user.email))),h("div",{class:"ksearch",onclick:()=>UI.palette()},"Search or ask…",h("kbd",null,"Ctrl K")),h("div",{id:"nav"}),h("div",{class:"sp"})),
+ app.replaceChildren(h("div",{class:"side"},h("div",{class:"brand"},h("i",null,icon("radar")),h("div",null,S.me.name,h("small",null,S.me.user.role+" · "+S.me.user.email))),h("div",{class:"ksearch",onclick:()=>UI.palette()},"Search or ask…",h("kbd",null,"Ctrl K")),h("div",{id:"nav"}),h("div",{class:"sp"}),h("div",{class:"sidefoot"},h("div",{class:"who"},h("b",null,S.me.user.username||S.me.user.email),h("small",null,S.me.user.role+(S.me.scope?" · "+S.me.scope:""))),h("button",{class:"btn sm signout",type:"button",onclick:()=>UI.signOut()},"Sign out"))),
   h("div",{class:"main"},h("div",{id:"warn",class:"warnbar",style:"display:none"},"No CUDA GPU detected: models run on CPU and will be slow. In Colab choose Runtime → Change runtime type → T4 GPU, then restart."),
    h("div",{class:"top"},h("div",null,h("h1",{id:"ttl"}),h("div",{class:"sub",id:"sub"})),h("div",{class:"sp"}),h("div",{id:"acts",style:"display:flex;gap:8px"}),themeToggle(),h("span",{class:"chip",id:"hl"},"connecting…"),h("span",{class:"chip",id:"gpu"})),
    h("div",{class:"content"},h("div",{class:"tabs",id:"tabs"}),h("div",{id:"pg"},h("div",{class:"blocks",id:"blocks"})))));
 
  renderNav();const hs=(location.hash||"").slice(1).split(":");UI.go(hs[0]||firstAllowedPage(),hs[1]);openStream();api("/api/pulse").then(p=>{if(!p.error){S.pulse=p;updBadges()}})}
 window.addEventListener("hashchange",()=>{if(!S.me)return;const hs=(location.hash||"").slice(1).split(":");UI.go(hs[0]||firstAllowedPage(),hs[1])});
+UI.signOut=async()=>{await api("/api/auth/logout",{json:{}});setToken("");if(S.es){S.es.close();S.es=null}clearTimeout(S.timer);S.me=null;S.tree=null;S.authScreen="login";S.loginNotice="You have been signed out.";render()};
 window.UI=UI;render();
