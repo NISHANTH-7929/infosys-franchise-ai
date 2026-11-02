@@ -99,6 +99,11 @@ def test_scoped_answers_contain_only_the_own_outlet(I):
         text = r["answer"] + (r["df"].to_string() if r["df"] is not None else "") + r["sql"]
         assert set(OUT.findall(text)) <= {MINE}, (example, sorted(set(OUT.findall(text)) - {MINE}))
 
+def test_a_scoped_role_is_told_when_a_ranking_shows_only_its_outlet(I):
+    r = I.answer("Which outlet has the lowest customer satisfaction?", MINE)
+    assert r["answer"].startswith("Rankings compare outlets") and MINE in r["answer"] and r["rows"] == 1
+    assert not I.answer("Which outlet has the lowest customer satisfaction?")["answer"].startswith("Rankings")      # the whole chain: a real ranking
+
 def test_scoped_role_through_the_endpoint(login, I):
     for role in ("Store Manager", "Staff"):
         c = login(role, MINE)
