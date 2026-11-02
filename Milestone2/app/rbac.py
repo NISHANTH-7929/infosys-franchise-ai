@@ -11,7 +11,7 @@ ROLES = ["Admin", "Franchise Owner", "Store Manager", "Staff", "Auditor"]
 # page ids (the menu entries of server.py plus the profile and admin pages)
 AGENT_PAGES = {"workforce", "outlets", "inventory", "marketing", "sentiment", "audit"}
 ALL_PAGES = {"copilot", "profile", "admin"} | AGENT_PAGES
-EXTRA_MENU = [("profile", "Profile", "user"), ("admin", "Admin dashboard", "shield")]      # appended to V.MENU once the page exists
+EXTRA_MENU = [("profile", "My Profile", "user"), ("admin", "Admin Dashboard", "shield")]      # appended to V.MENU; the front end draws these two pages itself
 
 # page access matrix (Copilot, Workforce, Outlets, Inventory, Marketing, Sentiment, Audit; Profile for everyone; Users = the admin page)
 ROLE_MENU = {

@@ -22,16 +22,16 @@ def _persisted_secret():
         if os.path.exists(p): return open(p).read().strip()
         v = _s.token_urlsafe(48); fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.write(fd, v.encode()); os.close(fd); return v
     except Exception: return _s.token_urlsafe(48)
-JWT_SECRET_KEY = _secret("JWT_SECRET_KEY") or _persisted_secret()
-ADMIN_EMAIL_ID = _secret("ADMIN_EMAIL_ID", "admin@infosys.com"); DEMO_MODE = os.environ.get("DEMO_MODE", "1") != "0"     # 1 = seeded demo accounts shown on the login page (Colab demo). 0 = production: only the admin exists, with ADMIN_PASSWORD (or a random one printed once in the server log)
+JWT_SECRET_KEY = _secret("JWT_SECRET") or _secret("JWT_SECRET_KEY") or _persisted_secret()
+ADMIN_EMAIL_ID = _secret("ADMIN_EMAIL_ID", "admin@infosys.com")
 def _admin_pw():
+    """ADMIN_PASSWORD comes from Colab Secrets / env. There is no built-in default: without it a random password is generated once, stored beside the database and printed in the server log."""
     v = _secret("ADMIN_PASSWORD")
     if v: return v
-    if DEMO_MODE: return "Admin@123"
-    import secrets as _s; p = os.path.join(DATA_DIR, ".admin_initial");
+    import secrets as _s; p = os.path.join(DATA_DIR, ".admin_initial")
     if os.path.exists(p): return open(p).read().strip()
-    v = _s.token_urlsafe(9) + "1aA"; open(p, "w").write(v); print("\n*** DEMO_MODE=0: initial admin password:", v, "(stored in", p, ") ***\n"); return v
+    v = _s.token_urlsafe(9) + "1aA"; open(p, "w").write(v); print("*** ADMIN_PASSWORD secret not set: generated initial admin password:", v, "(stored in", p, ") ***"); return v
 ADMIN_PASSWORD = _admin_pw()
-EMAIL_ID = _secret("EMAIL_ID"); EMAIL_PASSWORD = _secret("EMAIL_PASSWORD").replace(" ", "")
+EMAIL_ID = _secret("EMAIL_ADDRESS") or _secret("EMAIL_ID"); EMAIL_PASSWORD = _secret("EMAIL_PASSWORD").replace(" ", "")
 MODEL_NAME = os.environ.get("LLM_MODEL", "")
 NLLB_MODEL = os.environ.get("NLLB_MODEL", "facebook/nllb-200-distilled-600M")

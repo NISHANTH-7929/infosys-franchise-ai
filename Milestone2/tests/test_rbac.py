@@ -44,7 +44,7 @@ def test_unknown_page_is_404_for_everyone(login):
 def test_menu_matches_matrix(login, role):
     me = login(*who(role)).get("/api/me").json()
     ids = [m["id"] for m in me["menu"]]
-    assert set(ids) == {p for p, ok in zip(PAGES, MATRIX[role]) if ok}
+    assert set(ids) == {p for p, ok in zip(PAGES, MATRIX[role]) if ok} | {"profile"} | ({"admin"} if USERS_PAGE[role] else set())
     assert me["user"]["role"] == role and "password_hash" not in me["user"]
     assert me["scope"] == (MINE if role in SCOPED else None)
     assert ("run" in me["caps"]) == RUN_AGENTS[role] and ("users" in me["caps"]) == USERS_PAGE[role]
