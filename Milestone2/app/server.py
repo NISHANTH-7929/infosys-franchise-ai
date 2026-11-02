@@ -10,8 +10,7 @@ import pandas as pd
 import numpy as np
 import gpu, qa as QA, analyst as AN, live_engine as LE, entities as EN, blocks as B
 import views_core as VC
-import rbac
-from localuser import USER
+import rbac, accounts
 dom = importlib.import_module("domain_franchise" if KIND == "Franchise" else "domain_freight")
 V = importlib.import_module("views_franchise" if KIND == "Franchise" else "views_freight")
 HERE = os.path.dirname(os.path.abspath(__file__)); STATIC = os.path.join(HERE, "static")
@@ -24,7 +23,7 @@ async def sec(request, call_next):
 
 def _boot():
     from db import init_db; from seed_data import seed_all
-    init_db(); seed_all(); LE.init_live_tables(); _ready["db"] = True
+    init_db(); seed_all(); LE.init_live_tables(); accounts.init(); _ready["db"] = True
 @app.on_event("startup")
 def startup():
     global _worker
@@ -38,13 +37,14 @@ def shutdown():
         except Exception: pass
 
 # ------------------------------------------------------------------ auth + context
-def user_of(request: Request): return USER                       # one local operator (admin): replaced by the Milestone 1 login (JWT) in the auth step
+def user_of(request: Request): return accounts.current_user(request)     # the Milestone 1 login: Bearer JWT -> the real user (401 when missing, expired, deleted or locked)
+app.include_router(accounts.router)
 app.state.user_of = lambda request: user_of(request)               # late-bound so hardening.py (metrics) always asks the current user_of
 def ctx(u, params=None):
     """Identity and permission for one request. Raises 403 for an unknown role or a scoped role with no outlet. scope = the outlet id, or None for all outlets."""
     return {"dom": dom, "kind": KIND, "role": rbac.role_of(u), "email": u["email"], "user": u, "scope": rbac.scope_for(u), "params": params or {}}
 def need(c, cap): rbac.need(c, cap)                                 # 403 when the role lacks the capability (see rbac.ROLE_CAPS)
-def _catalog(): return list(V.MENU) + [m for m in rbac.EXTRA_MENU if m[0] in V.PAGES]   # profile / admin appear once their page exists
+def _catalog(): return list(V.MENU) + list(rbac.EXTRA_MENU)         # the profile and admin pages are drawn by the front end from /api/profile and /api/admin/*
 def menu_for(user): return rbac.menu_for(user if isinstance(user, str) else rbac.role_of(user), _catalog())
 def ok(msg="Done", **kw): return {"ok": True, "msg": msg, **kw}
 def bad(msg): return JSONResponse({"ok": False, "msg": msg}, status_code=400)

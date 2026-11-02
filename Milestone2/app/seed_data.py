@@ -41,47 +41,7 @@ def seed_all():
                 (f"PORT-{i:03d}", p[0], p[1], p[2], p[3], p[4], p[5], p[6])
             )
 
-        # 2. Demo accounts — one per role, INCLUDING Admin, all seeded the same guaranteed way.
-        # Admin uses your ADMIN_EMAIL_ID/ADMIN_PASSWORD secrets if set, else falls back to a fixed default
-        # (admin@infosys.com / Admin@123) — same predictable pattern as the other 3 roles.
-        try:
-            import hashlib
-            from auth import hash_password
-            from config import ADMIN_EMAIL_ID, ADMIN_PASSWORD
-
-            demo_pw = hash_password("Demo@1234")
-            demo_ans = hashlib.sha256("infosys".encode("utf-8")).hexdigest()
-            admin_pw = hash_password(ADMIN_PASSWORD)
-            admin_ans = hashlib.sha256("infosys".encode("utf-8")).hexdigest()
-
-            demo_users = [
-                (1, "admin",    ADMIN_EMAIL_ID,        "Admin",            admin_pw),
-                (2, "owner",    "owner@infosys.com",   "Franchise Owner",  demo_pw),
-                (3, "manager",  "manager@infosys.com", "Store Manager",    demo_pw),
-                (4, "staff",    "staff@infosys.com",   "Staff",             demo_pw),
-                (5, "customer", "customer@infosys.com","Customer",          demo_pw),
-            ]
-
-            # Upsert demo accounts. This is intentionally limited to the
-            # authentication fields so stale passwords/lock states cannot
-            # prevent non-admin users from logging in.
-            for uid, uname, uemail, urole, pw_hash in demo_users:
-                safe_exec(
-                    conn,
-                    "INSERT INTO users (id, username, email, password_hash, role, security_question, "
-                    "security_answer, failed_attempts, lock_until, account_status) "
-                    "VALUES (?, ?, ?, ?, ?, 'What is your favorite book/movie?', ?, 0, NULL, 'active') "
-                    "ON CONFLICT(id) DO UPDATE SET "
-                    "username=excluded.username, email=excluded.email, password_hash=excluded.password_hash, "
-                    "role=excluded.role, security_question=excluded.security_question, "
-                    "security_answer=excluded.security_answer, failed_attempts=0, lock_until=NULL, "
-                    "account_status='active';",
-                    (uid, uname, uemail, pw_hash, urole,
-                     admin_ans if urole == "Admin" else demo_ans)
-                )
-
-        except Exception:
-            pass
+        # 2. User accounts are created by accounts.py (signup, admin dashboard and the seeded Admin); no demo passwords live in the code.
 
         # 3. Shipments
         safe_exec(conn, "DELETE FROM shipments;")

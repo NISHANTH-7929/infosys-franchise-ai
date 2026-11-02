@@ -100,7 +100,7 @@ def notify(dom, target, severity, category, message):
         if os.environ.get(var):
             try: requests.post(os.environ[var], json={"text": text}, timeout=5)
             except Exception: pass
-    em, pw, to = os.environ.get("EMAIL_ID"), (os.environ.get("EMAIL_APP_PASSWORD") or os.environ.get("EMAIL_PASSWORD") or "").replace(" ", ""), os.environ.get("ALERT_EMAIL_TO")
+    em, pw, to = os.environ.get("EMAIL_ADDRESS") or os.environ.get("EMAIL_ID"), (os.environ.get("EMAIL_APP_PASSWORD") or os.environ.get("EMAIL_PASSWORD") or "").replace(" ", ""), os.environ.get("ALERT_EMAIL_TO")
     if em and pw and to:
         try:
             m = EmailMessage(); m["Subject"] = text[:90]; m["From"] = em; m["To"] = to; m.set_content(text)
