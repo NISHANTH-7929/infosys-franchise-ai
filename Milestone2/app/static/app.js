@@ -257,6 +257,18 @@ function renderProfilePage(){
 function passwordCriteriaForProfile(input){
  return[()=>input.value.length>=8,()=>/[A-Z]/.test(input.value),()=>/[a-z]/.test(input.value),()=>/[0-9]/.test(input.value),()=>/[!@#$%^&*(),.?":{}|<>~`_+=/\\[\];'-]/.test(input.value)];
 }
+function pickOutlet(username,role,outlets){
+ return new Promise(resolve=>{
+  const sel=h("select",{class:"in","aria-label":"Outlet"},...outlets.map(x=>h("option",{value:x},x)));
+  const done=v=>{ov.remove();document.removeEventListener("keydown",kd,true);resolve(v)};
+  const kd=e=>{if(e.key==="Escape")done(null)};
+  const ov=h("div",{class:"kpal",role:"dialog","aria-modal":"true","aria-label":"Choose an outlet",onclick:e=>{if(e.target===ov)done(null)}},
+   h("div",{class:"card",style:"padding:20px;display:grid;gap:12px;max-width:420px"},h("h3",{style:"margin:0"},"Choose the outlet"),
+    h("p",{class:"sub",style:"margin:0"},username+" becomes a "+role+", who works at one outlet. Which outlet?"),sel,
+    h("div",{class:"profile-form-actions"},h("button",{class:"btn",type:"button",onclick:()=>done(null)},"Cancel"),h("button",{class:"btn primary",type:"button",onclick:()=>done(sel.value)},"Apply"))));
+  document.addEventListener("keydown",kd,true);document.body.append(ov);sel.focus();
+ });
+}
 function renderAdminDashboard(){
  const root=h("div",{class:"admin-dashboard"});
  let data=null,query="",pendingDelete=null;
@@ -297,7 +309,7 @@ function renderAdminDashboard(){
  const roleCell=u=>{
   const me=data.me===u.id;const sel=h("select",{class:"in admin-role-select","aria-label":"Role of "+u.username,disabled:me,title:me?"You cannot change your own role.":""},...data.roles.map(r=>h("option",{value:r,selected:r===u.role},r)));
   sel.addEventListener("change",async()=>{
-   let o="";if(data.scoped_roles.includes(sel.value)){o=u.outlet||"";if(!o){o=(prompt("Outlet for the "+sel.value+" role (for example "+data.outlets[0]+"):",data.outlets[0])||"").trim().toUpperCase();if(!o){sel.value=u.role;return}}}
+   let o="";if(data.scoped_roles.includes(sel.value)){o=u.outlet||u.saved_outlet||"";if(!o){o=await pickOutlet(u.username,sel.value,data.outlets);if(!o){sel.value=u.role;return}}}
    const r=await act("/api/admin/users/"+u.id+"/role",{role:sel.value,outlet:o});if(!r.ok)sel.value=u.role;
   });return sel};
  const outletCell=u=>{
@@ -345,7 +357,7 @@ function renderAdminDashboard(){
 async function loadPage(silent){const seq=++S.seq;clearTimeout(S.timer);if(S.page==="profile"||S.page==="admin"){S.tab=null;S.params={};S.live=0;const profile=S.page==="profile";$("#ttl").textContent=profile?"My Profile":"Admin Dashboard";$("#sub").textContent=profile?"Account details and security":"Users, access, and recent activity";document.title=(profile?"My Profile":"Admin Dashboard")+" · "+S.me.name;$("#tabs").replaceChildren();$("#tabs").style.display="none";$("#acts").replaceChildren();$("#blocks").replaceChildren(profile?renderProfilePage():renderAdminDashboard());return}const q=new URLSearchParams();if(S.tab)q.set("tab",S.tab);if(Object.keys(S.params).length)q.set("p",JSON.stringify(S.params));
  if(!silent){S.tree=null;$("#blocks").replaceChildren(h("div",{class:"boot"},h("div",{class:"spin"}),"Loading…"))}
  const t=performance.now();const d=await api(`/api/page/${S.page}?`+q);if(seq!==S.seq)return;
- if(d.blocks===undefined){$("#blocks").replaceChildren(h("div",{class:"callout error"},d.msg||"Could not load"));return}
+ if(d.blocks===undefined){$("#blocks").replaceChildren(h("div",{class:"callout error",role:"alert"},h("span",null,h("b",null,d.status===403?"Access denied (403). ":d.status===404?"Not found. ":"Could not load this page. "),d.msg||"")));return}
  S.ms=Math.round(performance.now()-t);$("#ttl").textContent=d.title;$("#sub").textContent=d.sub||"";document.title=d.title+" · "+S.me.name;
  const tabs=$("#tabs");tabs.replaceChildren(...(d.tabs||[]).map(x=>h("b",{class:(S.tab||d.tabs[0].id)===x.id?"on":"",onclick:()=>{S.params={};UI.go(S.page,x.id)}},x.label)));tabs.style.display=d.tabs?"":"none";
  $("#acts").replaceChildren(...(d.actions||[]).map(a=>h("button",{class:"btn "+(a.tone||"primary"),onclick:async e=>{e.target.disabled=true;const r=await api(a.url,{json:{}});toast(r.msg,!r.ok);e.target.disabled=false;reloadPage(true)}},a.label)));

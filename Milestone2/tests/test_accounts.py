@@ -200,9 +200,13 @@ def test_promote_and_demote_take_effect_immediately(call, admin, make):
     assert call("GET", "/api/page/workforce", token=tok).status_code == 200 and call("POST", "/api/run_cycle", token=tok).status_code == 200      # same token, new privileges
     assert call("POST", f"/api/admin/users/{u['id']}/role", token=admin[0], json={"role": "Auditor"}).status_code == 200
     assert call("POST", "/api/run_cycle", token=tok).status_code == 403 and call("GET", "/api/page/workforce", token=tok).status_code == 200
-    assert call("POST", f"/api/admin/users/{u['id']}/role", token=admin[0], json={"role": "Store Manager"}).status_code == 400            # a scoped role needs an outlet
+    assert call("POST", f"/api/admin/users/{u['id']}/role", token=admin[0], json={"role": "Store Manager"}).status_code == 200            # the outlet from signup was kept while they held an all-outlets role
+    assert call("GET", "/api/me", token=tok).json()["scope"] == "OUT-010"
     assert call("POST", f"/api/admin/users/{u['id']}/role", token=admin[0], json={"role": "Store Manager", "outlet": "OUT-020"}).status_code == 200
     assert call("GET", "/api/me", token=tok).json()["scope"] == "OUT-020"
+    _, nobody = make("Franchise Owner")                                                                                                   # never had an outlet: a scoped role needs one
+    assert call("POST", f"/api/admin/users/{nobody['id']}/role", token=admin[0], json={"role": "Store Manager"}).status_code == 400
+    assert call("POST", f"/api/admin/users/{nobody['id']}/role", token=admin[0], json={"role": "Staff", "outlet": "OUT-999"}).status_code == 400
     assert call("POST", f"/api/admin/users/{u['id']}/role", token=admin[0], json={"role": "Wizard"}).status_code == 400
 
 def test_non_admins_cannot_touch_users(call, make, admin):

@@ -249,7 +249,7 @@ async def copilot(request: Request):
         if exact and exact.get("answer"):
             tbl = (QA.md(exact["df"]) if exact.get("df") is not None else "") + (("\n\n" + exact["extra"]) if exact.get("extra") else "")
             rows = exact.get("rows", 0 if exact.get("df") is None else len(exact["df"])); yield _sse("exact", sql=exact["sql"], rows=rows)
-            foot = ("\n\n*%d row%s returned by a read-only SQL query (open \"Show the exact query\").*" % (rows, "" if rows == 1 else "s")) if exact.get("sql") else ""
+            foot = ("\n\n**%d row%s** returned by a read-only SQL query. Open \"Show the exact query\" to see it." % (rows, "" if rows == 1 else "s")) if exact.get("sql") else ""
             final = exact["answer"] + (("\n\n" + tbl) if tbl else "") + foot; yield _sse("final", text=final, sql=exact.get("sql", ""), ms=round((time.time() - t0) * 1000))
         else: yield _sse("final", text="Sorry, I can only answer from the franchise database (outlets, staff, inventory, campaigns, reviews, audits, tickets and sales), and I could not match that question. Try one of these:\n" + "\n".join("- " + e for e in intents.suggestions(sc, q)), sql="", ms=round((time.time() - t0) * 1000))
         yield _sse("done")

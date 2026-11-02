@@ -37,7 +37,7 @@ def ticket_block(c, agent=None, types=None, title="Open tickets", target=None, k
     return B.table(df, ["id", "ts", B.pill_col("severity"), "type", "target", "detail"], title=title, h=300, key=key or f"tk_{agent or target or 'all'}", open={"col": "target"} if False else None)
 def hero(c, agent, title, blurb):
     r = latest(agent)
-    if c.get("scope") and r: r = {**r, "score": None, "risk": None, "summary": None}      # the agent's score and summary are chain-wide and name other outlets
+    if c.get("scope") and r: r = {**r, "score": None, "risk": "", "summary": "Showing your outlet only."}      # the agent's score and summary are chain-wide and name other outlets
     return B.hero(agent, title, blurb, r, can_run=can(c, "run"))
 def cross(c, targets, own, title="Flagged by other agents for these entities"):
     t = [str(x) for x in list(dict.fromkeys(targets))][:60]
