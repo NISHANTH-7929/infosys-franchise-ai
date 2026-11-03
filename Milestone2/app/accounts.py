@@ -4,7 +4,7 @@ the Admin dashboard API (add, delete, promote/demote, lock/unlock, activity log)
 Rules: passwords are hashed with bcrypt and never returned; the JWT carries only the user id (role, outlet and lock state are read
 from the database on EVERY request, so a promotion, demotion or lock takes effect immediately); an unknown user and a wrong password
 give the same error; 5 wrong passwords lock the account; the last Admin can never be removed, demoted or locked."""
-import re, time, secrets, sqlite3, datetime
+import re, time, secrets, sqlite3, datetime, hashlib, base64
 import bcrypt, jwt
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -15,22 +15,31 @@ router = APIRouter()
 COOKIE = "fo_token"                       # EventSource (live pulse) cannot send headers, so GET requests may also use this cookie
 TOKEN_HOURS = 8
 MAX_FAILS = 5
-OTP_MINUTES, OTP_TRIES, OTP_COOLDOWN = 10, 5, 30
+OTP_MINUTES, OTP_TRIES, OTP_COOLDOWN, OTP_BLOCK_MIN = 5, 3, 60, 15      # as in Milestone 1: a code lives 5 minutes, 3 wrong codes pause recovery for 15 minutes, a new code after 60 seconds
+SECURITY_QUESTIONS = ["What was the name of your first school?", "What is your mother's maiden name?", "What was your favorite childhood pet's name?",
+                      "What is the name of the city where you were born?", "What was the make of your family's first car?"]      # same list as Milestone 1
+SQ_TRIES, SQ_BLOCK_MIN = 3, 15                  # 3 wrong security answers pause that route for the account for 15 minutes
 SIGNUP_ROLES = [r for r in rbac.ROLES if r != "Admin"]      # a person may pick their own role at signup, but never Admin (only an Admin can promote)
 GENERIC = "Invalid email/username or password."
 _DUMMY = bcrypt.hashpw(b"timing-equaliser", bcrypt.gensalt())
 
 def db():
     c = sqlite3.connect(config.DB_PATH, timeout=30); c.row_factory = sqlite3.Row; c.execute("PRAGMA journal_mode=WAL;"); c.execute("PRAGMA busy_timeout=30000;"); return c
-def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")      # stored with its time zone; the browser shows it in IST
+def iso(ts):
+    """Any stored time as an ISO string WITH an offset (an old naive value is the server's local time), so the front end can show it in IST."""
+    if not ts: return None
+    try: d = datetime.datetime.fromisoformat(str(ts).replace(" ", "T"))
+    except Exception: return str(ts)
+    return (d.astimezone() if d.tzinfo is None else d).isoformat(timespec="seconds")
 def hash_pw(p): return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 def check_pw(p, h):
     try: return bcrypt.checkpw(p.encode(), (h or "").encode())
     except Exception: return False
 
 # ------------------------------------------------------------------ users table (extends the table db.py creates)
-NEW_COLS = {"outlet": "TEXT", "locked": "INTEGER NOT NULL DEFAULT 0", "last_login": "TEXT", "token_version": "INTEGER NOT NULL DEFAULT 0",
-            "otp_hash": "TEXT", "otp_expires": "REAL", "otp_tries": "INTEGER NOT NULL DEFAULT 0", "otp_sent": "REAL"}
+NEW_COLS = {"outlet": "TEXT", "sq_tries": "INTEGER NOT NULL DEFAULT 0", "sq_blocked_until": "REAL", "locked": "INTEGER NOT NULL DEFAULT 0", "last_login": "TEXT", "token_version": "INTEGER NOT NULL DEFAULT 0",
+            "otp_hash": "TEXT", "otp_expires": "REAL", "otp_tries": "INTEGER NOT NULL DEFAULT 0", "otp_sent": "REAL", "otp_blocked_until": "REAL"}
 def init():
     with db() as c:
         c.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, email TEXT UNIQUE, password_hash TEXT, role TEXT, security_question TEXT, security_answer TEXT, profile_picture TEXT, failed_attempts INTEGER DEFAULT 0, lock_until DATETIME DEFAULT NULL, account_status TEXT DEFAULT 'active', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)")
@@ -44,7 +53,7 @@ def init():
     if seed: LE.audit("system", "admin_seeded", config.ADMIN_EMAIL_ID.lower(), "first Admin created from the ADMIN_PASSWORD secret")
 
 PUBLIC_COLS = "id, email, username, role, outlet, locked, failed_attempts, created_at, last_login"
-def public(r): return {"id": r["id"], "email": r["email"], "username": r["username"], "role": r["role"], "outlet": r["outlet"] if r["role"] in rbac.SCOPED_ROLES else None, "locked": bool(r["locked"]), "created_at": r["created_at"], "last_login": r["last_login"]}
+def public(r): return {"id": r["id"], "email": r["email"], "username": r["username"], "role": r["role"], "outlet": r["outlet"] if r["role"] in rbac.SCOPED_ROLES else None, "locked": bool(r["locked"]), "created_at": iso(r["created_at"]), "last_login": iso(r["last_login"])}
 def outlets():
     with db() as c: return [r[0] for r in c.execute("SELECT outlet_id FROM outlets ORDER BY outlet_id").fetchall()]
 
@@ -85,22 +94,33 @@ def validate_new_account(email, username, password, confirm, role, outlet, allow
         if outlet not in outlets(): fail("That outlet does not exist.")
     else: outlet = None
     return email.strip().lower(), username.strip(), outlet
-def insert_user(email, username, password, role, outlet):
+def norm_answer(s): return re.sub(r"\s+", " ", (s or "").strip().lower())
+def validate_security(question, answer):
+    check(V.validate_mandatory_fields({"Security question": question, "Security answer": answer}))
+    if question not in SECURITY_QUESTIONS: fail("Choose a security question from the list.")
+    if len(norm_answer(answer)) < 2: fail("The security answer must be at least 2 characters.")
+    if len(answer) > 100: fail("The security answer is too long.")
+def decoy_question(email):
+    """Unknown, locked or question-less accounts get a stable, believable question, so the form never reveals which e-mails are registered."""
+    return SECURITY_QUESTIONS[int(hashlib.sha256(email.strip().lower().encode()).hexdigest()[:8], 16) % len(SECURITY_QUESTIONS)]
+def insert_user(email, username, password, role, outlet, question=None, answer=None):
     with db() as c:
         if c.execute("SELECT 1 FROM users WHERE lower(email)=?", (email,)).fetchone(): fail("This email is already registered.")
         if c.execute("SELECT 1 FROM users WHERE lower(username)=lower(?)", (username,)).fetchone(): fail("This username is taken.")
-        cur = c.execute("INSERT INTO users(username,email,password_hash,role,outlet,locked,failed_attempts,created_at) VALUES(?,?,?,?,?,0,0,?)", (username, email, hash_pw(password), role, outlet, now()))
+        cur = c.execute("INSERT INTO users(username,email,password_hash,role,outlet,locked,failed_attempts,created_at,security_question,security_answer) VALUES(?,?,?,?,?,0,0,?,?,?)",
+                        (username, email, hash_pw(password), role, outlet, now(), question, hash_pw(norm_answer(answer)) if answer else None))
         return cur.lastrowid
 
 # ------------------------------------------------------------------ public auth routes
 @router.get("/api/auth/options")
-def auth_options(): return {"roles": SIGNUP_ROLES, "scoped_roles": sorted(rbac.SCOPED_ROLES), "outlets": outlets()}
+def auth_options(): return {"roles": SIGNUP_ROLES, "scoped_roles": sorted(rbac.SCOPED_ROLES), "outlets": outlets(), "questions": SECURITY_QUESTIONS}
 
 @router.post("/api/auth/signup")
 async def signup(request: Request):
     d = await jbody(request); email, username, password, confirm, role, outlet = body_of(d, "email", "username", "password", "confirm_password", "role", "outlet")
     email, username, outlet = validate_new_account(email, username, password, confirm, role, outlet, SIGNUP_ROLES)      # Admin is not offered and is refused here
-    uid = insert_user(email, username, password, role, outlet); LE.audit(email, "signup", str(uid), f"role={role} outlet={outlet or '-'}")
+    question, answer = body_of(d, "security_question", "security_answer"); validate_security(question, answer)
+    uid = insert_user(email, username, password, role, outlet, question, answer); LE.audit(email, "signup", str(uid), f"role={role} outlet={outlet or '-'}")
     return ok("Account created. You can sign in now.")
 
 @router.post("/api/auth/login")
@@ -132,46 +152,103 @@ async def login(request: Request):
 def logout():
     resp = JSONResponse({"ok": True, "msg": "Signed out."}); resp.delete_cookie(COOKIE, path="/"); return resp
 
-# ---- password recovery by e-mail code: forgot -> verify -> reset
-def _user_by_email(c, email): return c.execute("SELECT id, email, role, locked, otp_hash, otp_expires, otp_tries, otp_sent FROM users WHERE lower(email)=?", (email.strip().lower(),)).fetchone()
+# ---- password recovery: look the account up by e-mail OR username; prove who you are by an e-mailed code or by the security question.
+#      A locked account cannot recover (an Admin must unlock it). 3 wrong codes (or 3 wrong answers) pause that route for 15 minutes.
+def _find(c, ident):
+    return c.execute("SELECT id, email, username, role, locked, security_question, security_answer, otp_hash, otp_expires, otp_tries, otp_sent, otp_blocked_until, sq_tries, sq_blocked_until FROM users WHERE lower(email)=lower(?) OR lower(username)=lower(?)", (ident, ident)).fetchone()
+def _ident(d):
+    v = d.get("identity") if d.get("identity") not in (None, "") else d.get("email"); return str(v or "").strip()
+def _minutes(ts): return int(((ts or 0) - time.time() + 59) // 60) if (ts or 0) > time.time() else 0
+def _open(r):
+    if r and r["locked"]: fail("This account is locked. Contact an administrator.", 403)         # an Admin must unlock it first; no code, no question, no reset
+
 def _otp_ok(c, r, code, consume):
-    """True when the code is right. Counts tries (OTP_TRIES wrong codes burn it) and enforces expiry."""
+    """True when the code is right. Counts tries, enforces expiry, and after OTP_TRIES wrong codes pauses e-mail recovery for OTP_BLOCK_MIN minutes."""
     if not r or not r["otp_hash"] or (r["otp_expires"] or 0) < time.time(): return False
-    if (r["otp_tries"] or 0) >= OTP_TRIES: c.execute("UPDATE users SET otp_hash=NULL, otp_expires=NULL WHERE id=?", (r["id"],)); c.commit(); return False
     if not re.fullmatch(r"\d{6}", code or "") or not check_pw(code, r["otp_hash"]):
-        c.execute("UPDATE users SET otp_tries=otp_tries+1 WHERE id=?", (r["id"],)); c.commit(); return False       # commit: the caller raises, which would roll the counter back
-    if consume: c.execute("UPDATE users SET otp_hash=NULL, otp_expires=NULL, otp_tries=0 WHERE id=?", (r["id"],)); c.commit()
+        n = (r["otp_tries"] or 0) + 1
+        if n >= OTP_TRIES: c.execute("UPDATE users SET otp_hash=NULL, otp_expires=NULL, otp_tries=0, otp_blocked_until=? WHERE id=?", (time.time() + OTP_BLOCK_MIN * 60, r["id"]))
+        else: c.execute("UPDATE users SET otp_tries=? WHERE id=?", (n, r["id"]))
+        c.commit()                                                                                  # commit: the caller raises, which would roll the counter back
+        if n >= OTP_TRIES: LE.audit(r["email"], "recovery_paused", str(r["id"]), f"{OTP_TRIES} wrong e-mail codes, paused {OTP_BLOCK_MIN} minutes")
+        return False
+    if consume: c.execute("UPDATE users SET otp_hash=NULL, otp_expires=NULL, otp_tries=0, otp_blocked_until=NULL WHERE id=?", (r["id"],)); c.commit()
     return True
+def _code_failed(c, ident):
+    r = _find(c, ident); w = _minutes(r["otp_blocked_until"]) if r else 0
+    if w: fail(f"Too many wrong codes. Recovery by e-mail code is paused for {w} more minute(s). You can still use your security question.", 429)
+    fail("That code is wrong or has expired.")
 
 @router.post("/api/auth/forgot")
 async def forgot(request: Request):
-    d = await jbody(request); (email,) = body_of(d, "email"); check(V.validate_email_format(email.strip()))
-    msg = "If an account exists for that email, a 6-digit code has been sent. It is valid for %d minutes." % OTP_MINUTES
+    d = await jbody(request); ident = _ident(d)
+    if not ident: fail("Enter your email or username.")
+    msg = "If an account exists for that email or username, a 6-digit code has been sent to its e-mail. It is valid for %d minutes." % OTP_MINUTES
+    send = None
     with db() as c:
-        r = _user_by_email(c, email)
-        if r and not r["locked"] and time.time() - (r["otp_sent"] or 0) >= OTP_COOLDOWN:
-            code = f"{secrets.randbelow(10**6):06d}"
-            c.execute("UPDATE users SET otp_hash=?, otp_expires=?, otp_tries=0, otp_sent=? WHERE id=?", (hash_pw(code), time.time() + OTP_MINUTES * 60, time.time(), r["id"]))
-            sent, info = mailer.send(r["email"], "Your FranchiseOps AI verification code", f"Your verification code is {code}. It expires in {OTP_MINUTES} minutes. If you did not ask for it, ignore this e-mail.")
-            if not sent: print(f"[forgot-password] e-mail not sent ({info}); code for {r['email']}: {code}")       # visible in the server log when Gmail is not configured
+        r = _find(c, ident); _open(r)
+        if r:
+            w = _minutes(r["otp_blocked_until"])
+            if w: fail(f"Too many wrong codes. Recovery by e-mail code is paused for {w} more minute(s). You can still use your security question.", 429)
+            if time.time() - (r["otp_sent"] or 0) >= OTP_COOLDOWN:
+                code = f"{secrets.randbelow(10**6):06d}"
+                c.execute("UPDATE users SET otp_hash=?, otp_expires=?, otp_tries=0, otp_sent=? WHERE id=?", (hash_pw(code), time.time() + OTP_MINUTES * 60, time.time(), r["id"]))
+                send = (r["email"], code, r["username"])
+    if send:                                                                                        # sent after the transaction closes, so the database is never held during the network call
+        to, code, name = send
+        sent, info = mailer.send(to, "Your FranchiseOps AI verification code", mailer.otp_text(code, OTP_MINUTES, name), html=mailer.otp_html(code, OTP_MINUTES, name))
+        if not sent: print(f"[forgot-password] e-mail not sent ({info}); code for {to}: {code}")       # visible in the server log when Gmail is not configured
     return ok(msg)
 
 @router.post("/api/auth/verify")
 async def verify(request: Request):
-    d = await jbody(request); email, otp = body_of(d, "email", "otp")
+    d = await jbody(request); ident = _ident(d); (otp,) = body_of(d, "otp")
     with db() as c:
-        if not _otp_ok(c, _user_by_email(c, email), otp.strip(), False): fail("That code is wrong or has expired.")
+        r = _find(c, ident); _open(r)
+        w = _minutes(r["otp_blocked_until"]) if r else 0
+        if w: fail(f"Too many wrong codes. Recovery by e-mail code is paused for {w} more minute(s). You can still use your security question.", 429)
+        if not _otp_ok(c, r, otp.strip(), False): _code_failed(c, ident)
     return ok("Code verified.")
 
 @router.post("/api/auth/reset")
 async def reset(request: Request):
-    d = await jbody(request); email, otp, pw, cf = body_of(d, "email", "otp", "password", "confirm_password")
+    d = await jbody(request); ident = _ident(d); otp, pw, cf = body_of(d, "otp", "password", "confirm_password")
     check(V.validate_password_complexity(pw)); check(V.validate_password_confirmation(pw, cf))
     with db() as c:
-        r = _user_by_email(c, email)
-        if not _otp_ok(c, r, otp.strip(), True): fail("That code is wrong or has expired.")
-        c.execute("UPDATE users SET password_hash=?, failed_attempts=0, token_version=token_version+1 WHERE id=?", (hash_pw(pw), r["id"]))     # old sessions end; a locked account stays locked
+        r = _find(c, ident); _open(r)
+        if not _otp_ok(c, r, otp.strip(), True): _code_failed(c, ident)
+        c.execute("UPDATE users SET password_hash=?, failed_attempts=0, token_version=token_version+1 WHERE id=?", (hash_pw(pw), r["id"]))     # old sessions end
     LE.audit(r["email"], "password_reset", str(r["id"]), "e-mail code"); return ok("Password changed. You can sign in with the new password.")
+
+@router.post("/api/auth/security-question")
+async def security_question(request: Request):
+    d = await jbody(request); ident = _ident(d)
+    if not ident: fail("Enter your email or username.")
+    with db() as c: r = _find(c, ident); _open(r)
+    return {"ok": True, "question": r["security_question"] if r and r["security_question"] else decoy_question(ident)}      # unknown or question-less: a stable decoy, so nobody can tell which accounts exist
+
+@router.post("/api/auth/reset-with-answer")
+async def reset_with_answer(request: Request):
+    d = await jbody(request); ident = _ident(d); answer, pw, cf = body_of(d, "answer", "password", "confirm_password")
+    check(V.validate_mandatory_fields({"Security answer": answer})); check(V.validate_password_complexity(pw)); check(V.validate_password_confirmation(pw, cf))
+    blocked_now = False
+    with db() as c:
+        r = _find(c, ident); _open(r)
+        wait = _minutes(r["sq_blocked_until"]) if r else 0
+        if wait: fail(f"Too many wrong answers. Recovery by security question is paused for {wait} more minute(s). You can still use the e-mail code.", 429)
+        usable = bool(r and r["security_answer"])
+        if usable: good = check_pw(norm_answer(answer), r["security_answer"])
+        else: bcrypt.checkpw(b"x", _DUMMY); good = False                      # unknown or question-less account: same work, same answer
+        if not good:
+            if usable:
+                n = (r["sq_tries"] or 0) + 1; blocked_now = n >= SQ_TRIES
+                c.execute("UPDATE users SET sq_tries=?, sq_blocked_until=? WHERE id=?", (0 if blocked_now else n, time.time() + SQ_BLOCK_MIN * 60 if blocked_now else None, r["id"])); c.commit()      # commit: raising below would roll it back
+        else:
+            c.execute("UPDATE users SET password_hash=?, failed_attempts=0, sq_tries=0, sq_blocked_until=NULL, token_version=token_version+1 WHERE id=?", (hash_pw(pw), r["id"]))
+    if not good:
+        if blocked_now: LE.audit(r["email"], "recovery_paused", str(r["id"]), f"{SQ_TRIES} wrong security answers, paused {SQ_BLOCK_MIN} minutes")
+        fail("That answer is wrong." + (f" Recovery by security question is now paused for {SQ_BLOCK_MIN} minutes." if blocked_now else ""))
+    LE.audit(r["email"], "password_reset", str(r["id"]), "security question"); return ok("Password changed. You can sign in with the new password.")
 
 # ------------------------------------------------------------------ profile
 def _server():
@@ -182,8 +259,39 @@ def me_ctx(request):
 @router.get("/api/profile")
 def profile(request: Request):
     u, c = me_ctx(request); rbac.need(c, "profile")
-    with db() as cn: r = cn.execute(f"SELECT {PUBLIC_COLS} FROM users WHERE id=?", (u["id"],)).fetchone()
-    return {"ok": True, "profile": public(r)}
+    with db() as cn: r = cn.execute(f"SELECT {PUBLIC_COLS}, security_question, profile_picture FROM users WHERE id=?", (u["id"],)).fetchone()
+    return {"ok": True, "profile": {**public(r), "security_question": r["security_question"], "picture": r["profile_picture"]}}        # the question (never the answer) so the person can see what they chose
+
+MAX_PICTURE = 150_000                           # bytes after decoding; the browser shrinks the photo to a small square first
+MAGIC = {"png": b"\x89PNG", "jpeg": b"\xff\xd8\xff", "webp": b"RIFF"}
+def picture_of(uid):
+    with db() as c: r = c.execute("SELECT profile_picture FROM users WHERE id=?", (uid,)).fetchone()
+    return r[0] if r else None
+
+@router.post("/api/profile/picture")
+async def profile_picture(request: Request):
+    u, c = me_ctx(request); rbac.need(c, "profile"); d = await jbody(request)
+    if d.get("remove") is True:
+        with db() as cn: cn.execute("UPDATE users SET profile_picture=NULL WHERE id=?", (u["id"],))
+        return ok("Photo removed.", picture=None)
+    img = str(d.get("image") or ""); m = re.fullmatch(r"data:image/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)", img)
+    if not m: fail("Choose a PNG, JPEG or WebP image.")
+    try: raw = base64.b64decode(m.group(2), validate=True)
+    except Exception: fail("That image could not be read.")
+    if len(raw) > MAX_PICTURE: fail("The photo is too large. Choose a smaller one (under 150 KB after resizing).")
+    if not raw.startswith(MAGIC[m.group(1)]): fail("That file is not a real " + m.group(1).upper() + " image.")
+    with db() as cn: cn.execute("UPDATE users SET profile_picture=? WHERE id=?", (img, u["id"]))
+    LE.audit(u["email"], "profile_picture_changed", str(u["id"]), ""); return ok("Photo saved.", picture=img)
+
+@router.post("/api/profile/security")
+async def profile_security(request: Request):
+    u, c = me_ctx(request); rbac.need(c, "profile"); d = await jbody(request); cur, question, answer = body_of(d, "current_password", "security_question", "security_answer")
+    check(V.validate_mandatory_fields({"Current password": cur})); validate_security(question, answer)
+    with db() as cn:
+        r = cn.execute("SELECT password_hash FROM users WHERE id=?", (u["id"],)).fetchone()
+        if not check_pw(cur, r["password_hash"]): fail("The current password is wrong.")
+        cn.execute("UPDATE users SET security_question=?, security_answer=?, sq_tries=0, sq_blocked_until=NULL WHERE id=?", (question, hash_pw(norm_answer(answer)), u["id"]))
+    LE.audit(u["email"], "security_question_changed", str(u["id"]), ""); return ok("Security question saved.", security_question=question)
 
 @router.post("/api/profile/username")
 async def profile_username(request: Request):
@@ -221,10 +329,10 @@ def _target(cn, uid):
 def admin_overview(request: Request):
     admin_ctx(request)
     with db() as cn:
-        rows = cn.execute(f"SELECT {PUBLIC_COLS} FROM users ORDER BY id").fetchall(); per = {r: 0 for r in rbac.ROLES}
+        rows = cn.execute(f"SELECT {PUBLIC_COLS}, profile_picture FROM users ORDER BY id").fetchall(); per = {r: 0 for r in rbac.ROLES}
         for r in rows: per[r["role"]] = per.get(r["role"], 0) + 1
-        log = [dict(x) for x in cn.execute("SELECT ts, actor, event, target, detail FROM audit_log ORDER BY audit_id DESC LIMIT 50").fetchall()]
-    return {"ok": True, "users": [{**public(r), "saved_outlet": r["outlet"]} for r in rows], "kpis": {"total": len(rows), "locked": sum(1 for r in rows if r["locked"]), "active": sum(1 for r in rows if not r["locked"]), "per_role": per},
+        log = [{**dict(x), "ts": iso(x["ts"])} for x in cn.execute("SELECT ts, actor, event, target, detail FROM audit_log ORDER BY audit_id DESC LIMIT 50").fetchall()]
+    return {"ok": True, "users": [{**public(r), "saved_outlet": r["outlet"], "picture": r["profile_picture"]} for r in rows], "kpis": {"total": len(rows), "locked": sum(1 for r in rows if r["locked"]), "active": sum(1 for r in rows if not r["locked"]), "per_role": per},
             "activity": log, "roles": rbac.ROLES, "scoped_roles": sorted(rbac.SCOPED_ROLES), "outlets": outlets(), "matrix": rbac.permission_table()}
 
 @router.post("/api/admin/users")

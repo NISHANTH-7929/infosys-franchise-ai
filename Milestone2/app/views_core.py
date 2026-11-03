@@ -35,8 +35,15 @@ def ticket_block(c, agent=None, types=None, title="Open tickets", target=None, k
     df = tk_df(c, agent, types, target, limit=limit)
     if not len(df): return B.callout("Nothing raised right now.", "info", title)
     return B.table(df, ["id", "ts", B.pill_col("severity"), "type", "target", "detail"], title=title, h=300, key=key or f"tk_{agent or target or 'all'}", open={"col": "target"} if False else None)
+def ist_time(ts):
+    """A server timestamp (naive = the server's local time) as a clock time in Indian Standard Time, e.g. 10:42:15 PM IST."""
+    try: d = datetime.datetime.fromisoformat(str(ts))
+    except Exception: return ts
+    d = d.astimezone() if d.tzinfo is None else d
+    return d.astimezone(datetime.timezone(datetime.timedelta(hours=5, minutes=30))).strftime("%I:%M:%S %p IST").lstrip("0")
 def hero(c, agent, title, blurb):
     r = latest(agent)
+    if r: r = {**r, "ts": ist_time(r["ts"])}
     if c.get("scope") and r: r = {**r, "score": None, "risk": "", "summary": "Showing your outlet only."}      # the agent's score and summary are chain-wide and name other outlets
     return B.hero(agent, title, blurb, r, can_run=can(c, "run"))
 def cross(c, targets, own, title="Flagged by other agents for these entities"):
