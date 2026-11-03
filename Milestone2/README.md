@@ -16,12 +16,13 @@ Infosys Springboard Internship 7.0, Batch 4. **Milestone 2 turns the single-oper
 
 ## Team
 
-| Member | GitHub | Area | Work in the final product |
-|---|---|---|---|
-| Nishanth (team lead) | [@NISHANTH-7929](https://github.com/NISHANTH-7929) | RBAC, integration, backend | Role-based access control (`rbac.py`: five roles, server-side 403, outlet scope), the accounts backend (`accounts.py`: login, sign-up, recovery, profile, Admin API), the Copilot SQL patterns (`intents.py`), the automated tests, the notebook build and the documentation. |
-| Aadiakshay201 | [@Aadiakshay201](https://github.com/Aadiakshay201) | UI/UX and front end | The redesigned interface (PR #2) that `static/` is built on: login, sign-up, recovery, profile and admin screens, dark mode, responsive layout, accessibility details. |
-| sidhesh77 | [@sidhesh77](https://github.com/sidhesh77) | Authentication and security | The first FastAPI authentication service (PR #4): sign-up, login, JWT, bcrypt, 5-attempt lock and e-mail code recovery. `accounts.py` implements the same design on the shared database. |
-| VarshaSpoorthi-shree | [@VarshaSpoorthi-shree](https://github.com/VarshaSpoorthi-shree) | Copilot fine-tuning | The list of question patterns and the spelling-correction approach (PR #3), now implemented as the 23 SQL intents in `intents.py`. |
+| Member | Area | What this area delivers in the final product |
+|---|---|---|
+| **Nishanth** (team lead) | RBAC | The five roles and the page access matrix, **server-side 403** on every page and action, and the one-outlet scope for Store Manager and Staff (`app/rbac.py`). Also integrated the parts into one application, wrote the automated tests and the notebook build, and the documentation. |
+| **Akshay** | UI / UX | The redesigned interface: login, sign-up, recovery, profile and admin screens, light and dark themes, phone layout, loading and error states (`app/static/`). |
+| **Sidhesh** | Auth and security | Sign-up, login, JWT sessions, bcrypt password hashing, lock after 5 wrong passwords, and password recovery by e-mail code and by security question (`app/accounts.py`). |
+| **Sujitha** | Admin dashboard and profile | The Admin Dashboard (users table, add, delete with confirmation, promote and demote, lock and unlock, activity log, KPI cards, privilege table) and the Profile page (details, photo, change username and password, security question). |
+| **Varsha** | Copilot fine-tuning and agents | The Copilot's 23 SQL question patterns with spelling tolerance, the SQL and row count under every answer, the polite fallback with three valid questions, and the six agent pages (`app/intents.py`). |
 
 ---
 
