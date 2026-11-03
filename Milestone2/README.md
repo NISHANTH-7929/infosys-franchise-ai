@@ -18,7 +18,7 @@ Infosys Springboard Internship 7.0, Batch 4. **Milestone 2 turns the single-oper
 
 | Member | Area | What this area delivers in the final product |
 |---|---|---|
-| **Nishanth** (team lead) | RBAC | The five roles and the page access matrix, **server-side 403** on every page and action, and the one-outlet scope for Store Manager and Staff (`app/rbac.py`). Also integrated the parts into one application, wrote the automated tests and the notebook build, and the documentation. |
+| **Nishanth** | RBAC | The five roles and the page access matrix, **server-side 403** on every page and action, and the one-outlet scope for Store Manager and Staff (`app/rbac.py`). Also integrated the parts into one application, wrote the automated tests and the notebook build, and the documentation. |
 | **Akshay** | UI / UX | The redesigned interface: login, sign-up, recovery, profile and admin screens, light and dark themes, phone layout, loading and error states (`app/static/`). |
 | **Sidhesh** | Auth and security | Sign-up, login, JWT sessions, bcrypt password hashing, lock after 5 wrong passwords, and password recovery by e-mail code and by security question (`app/accounts.py`). |
 | **Sujitha** | Admin dashboard and profile | The Admin Dashboard (users table, add, delete with confirmation, promote and demote, lock and unlock, activity log, KPI cards, privilege table) and the Profile page (details, photo, change username and password, security question). |
