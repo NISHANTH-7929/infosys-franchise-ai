@@ -55,7 +55,7 @@ def public():
     return {"kind": KIND, "name": V.NAME, "stage": (s or {}).get("stage", "starting"), "gpu": {"cuda": False, "name": None}, "questions": [], "email_enabled": False, "demo": []}
 @app.get("/api/me")
 def me(request: Request):
-    u = user_of(request); c = ctx(u); pub = {k: u.get(k) for k in ("id", "email", "username", "role", "outlet", "created_at", "last_login") if k in u}   # never the password hash
+    u = user_of(request); c = ctx(u); pub = {k: u.get(k) for k in ("id", "email", "username", "role", "outlet", "created_at", "last_login") if k in u}; pub["picture"] = accounts.picture_of(u["id"]) if u.get("id") else None   # never the password hash
     return {"user": pub, "kind": KIND, "name": V.NAME, "menu": [{"id": i, "label": l, "icon": ic} for i, l, ic in menu_for(u)], "caps": sorted(rbac.caps_of(c["role"])), "scope": c["scope"], "langs": ["English"], "questions": []}
 # ------------------------------------------------------------------ live pulse
 def pulse(scope=None):
