@@ -191,7 +191,9 @@ UI.go=(id,tab,params)=>{
  history.replaceState(null,"","#"+target+(S.tab?":"+S.tab:""));loadPage(false);renderNav();
  if(!allowed){const page=S.me.menu.find(item=>item&&item.id===target);toast(`Access unavailable: ${id||"that page"} is not in your available pages. Redirected to ${page?page.label:target}.`,true)}
 };
-function fmtTime(t){if(!t)return"Never";const d=new Date(t);return isNaN(d)?String(t):d.toLocaleString(undefined,{year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+function fmtTime(t){if(!t)return"Never";const d=new Date(t);return isNaN(d)?String(t):d.toLocaleString("en-IN",{timeZone:"Asia/Kolkata",day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:true})+" IST"}
+function fmtShort(t){if(!t)return"Never";const d=new Date(t);return isNaN(d)?String(t):d.toLocaleString("en-IN",{timeZone:"Asia/Kolkata",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",hour12:true})+" IST"}
+function avatarEl(src,name,size){const s=size||32;if(src)return h("img",{class:"av",src:src,alt:"",style:`width:${s}px;height:${s}px`});const ini=String(name||"?").split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join("")||"?";return h("span",{class:"av",style:`width:${s}px;height:${s}px;font-size:${Math.round(s*.4)}px`,"aria-hidden":"true"},ini)}
 function renderProfilePage(){
  const root=h("div",{class:"profile-page"});
  const status=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
@@ -221,9 +223,9 @@ function renderProfilePage(){
  const row=(label,text)=>h("div",{class:"profile-row"},h("div",{class:"profile-label"},label),h("div",{class:"profile-value"},text));
  const draw=()=>{
   const initials=(p.username||p.email||"?").split(/[\s@._-]+/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join("")||"?";
-  head.replaceChildren(h("div",{class:"profile-avatar","aria-label":"Account initials"},initials),h("div",{class:"profile-header-copy"},h("span",{class:"auth-kicker"},"FRANCHISEOPS AI ACCOUNT"),h("h2",null,p.username),h("p",null,p.email)),h("span",{class:"profile-role"},p.role));
+  head.replaceChildren(h("div",{class:"profile-avatar","aria-label":"Profile photo"},p.picture?h("img",{src:p.picture,alt:"Your profile photo"}):initials),h("div",{class:"profile-header-copy"},h("span",{class:"auth-kicker"},"FRANCHISEOPS AI ACCOUNT"),h("h2",null,p.username),h("p",null,p.email)),h("span",{class:"profile-role"},p.role));
   details.replaceChildren(row("Username",p.username),row("Email address",p.email),row("Role",p.role),row("Outlet",p.outlet||"All outlets"),row("Joined",fmtTime(p.created_at)),row("Last login",fmtTime(p.last_login)));
-  username.value=p.username;
+  username.value=p.username;sqDraw();welcomeDraw();
  };
  editButton.onclick=()=>{const open=edit.hidden;edit.hidden=!open;editButton.setAttribute("aria-expanded",String(open));say(editStatus,"");if(open)username.focus()};
  editCancel.onclick=()=>{username.value=p.username;say(editStatus,"");edit.hidden=true;editButton.setAttribute("aria-expanded","false")};
@@ -246,10 +248,42 @@ function renderProfilePage(){
   if(!r.ok){say(passwordStatus,r.msg||"Could not change the password.","error");return}
   setToken(r.token,!!localStorage.getItem("fo_token"));passwordForm.reset();passwordForm.hidden=true;passwordButton.setAttribute("aria-expanded","false");say(status,"Password changed. Other sessions were signed out.","notice");toast("Password changed.");
  });
+ const welcome=h("section",{class:"card profile-welcome"});
+ const sessionEnds=()=>{try{const b=authToken().split(".")[1].replace(/-/g,"+").replace(/_/g,"/");const x=JSON.parse(atob(b));return x.exp?fmtTime(new Date(x.exp*1000).toISOString()):"unknown"}catch(e){return"unknown"}};
+ const welcomeDraw=()=>welcome.replaceChildren(h("div",null,h("h2",null,"Welcome back, "+p.username+"!"),h("p",null,"You are signed in as "+p.role+(p.outlet?" at "+p.outlet:" (all outlets)")+". Member since "+fmtTime(p.created_at)+".")),h("div",{class:"session-pill"},h("span",{class:"dot g"}),"Session active · expires "+sessionEnds()));
+ const photoInput=h("input",{type:"file",accept:"image/png,image/jpeg,image/webp",hidden:true,id:"profile-photo-file"});
+ const photoStatus=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
+ const setPhoto=async body=>{const r=await api("/api/profile/picture",{json:body});if(!r.ok){say(photoStatus,r.msg||"Could not save the photo.","error");return}
+  p.picture=r.picture;S.me.user.picture=r.picture;draw();const slot=$(".av-slot");if(slot)slot.replaceChildren(avatarEl(r.picture,p.username,34));say(photoStatus,r.picture?"Photo saved.":"Photo removed.","notice");toast(r.picture?"Photo saved.":"Photo removed.")};
+ photoInput.addEventListener("change",()=>{const f=photoInput.files[0];photoInput.value="";if(!f)return;
+  if(!/^image\/(png|jpeg|webp)$/.test(f.type)){say(photoStatus,"Choose a PNG, JPEG or WebP image.","error");return}
+  if(f.size>8*1024*1024){say(photoStatus,"That image is larger than 8 MB.","error");return}
+  const img=new Image(),url=URL.createObjectURL(f);
+  img.onload=()=>{const n=192,cv=document.createElement("canvas");cv.width=cv.height=n;const cx=cv.getContext("2d");cx.fillStyle="#fff";cx.fillRect(0,0,n,n);const s=Math.min(img.width,img.height);cx.drawImage(img,(img.width-s)/2,(img.height-s)/2,s,s,0,0,n,n);URL.revokeObjectURL(url);setPhoto({image:cv.toDataURL("image/jpeg",0.85)})};
+  img.onerror=()=>{URL.revokeObjectURL(url);say(photoStatus,"That image could not be read.","error")};img.src=url});
+ const photoCard=h("section",{class:"card profile-card profile-photo","aria-labelledby":"profile-photo-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-photo-title"},"Profile photo"),h("p",null,"Shown in the sidebar and to your Admin. It is cropped to a small square before it is saved."))),
+  h("div",{class:"photo-actions"},h("button",{class:"btn sm",type:"button",onclick:()=>photoInput.click()},"Upload photo"),h("button",{class:"btn sm ghost",type:"button",onclick:()=>setPhoto({remove:true})},"Remove photo"),photoInput),photoStatus);
+ const sqCurrent=h("p",{class:"profile-feedback"}),sqStatus=h("p",{class:"profile-feedback","role":"status","aria-live":"polite"});
+ const sqSelect=h("select",{id:"profile-sq",name:"security_question",required:true},h("option",{value:""},"Loading questions…"));
+ const sqAnswer=h("input",{id:"profile-sq-answer",name:"security_answer",type:"text",autocomplete:"off",spellcheck:"false",required:true,minlength:"2",maxlength:"100"});
+ const sqPassword=h("input",{id:"profile-sq-password",name:"current-password",type:"password",autocomplete:"current-password",required:true});
+ const sqSave=h("button",{class:"btn primary",type:"submit"},"Save security question");
+ const sqForm=h("form",{class:"profile-form"});
+ sqForm.append(h("div",{class:"profile-edit-grid"},h("div",{class:"fld"},h("label",{for:"profile-sq"},"Security question"),sqSelect),h("div",{class:"fld"},h("label",{for:"profile-sq-answer"},"Your answer"),sqAnswer),
+  h("div",{class:"fld"},h("label",{for:"profile-sq-password"},"Current password"),h("div",{class:"password-field"},sqPassword,passwordToggle(sqPassword)))),h("div",{class:"profile-form-actions"},sqSave),sqStatus);
+ api("/api/auth/options").then(o=>{if(o.questions)sqSelect.replaceChildren(h("option",{value:""},"Choose a security question"),...o.questions.map(x=>h("option",{value:x},x)))});
+ const sqDraw=()=>{sqCurrent.textContent=p&&p.security_question?"Current question: "+p.security_question:"No security question yet. Set one so you can recover your password without e-mail."};
+ sqForm.addEventListener("submit",async event=>{event.preventDefault();say(sqStatus,"");
+  if(!sqForm.reportValidity()){say(sqStatus,"Check the highlighted fields.","error");return}
+  sqSave.disabled=true;const r=await api("/api/profile/security",{json:{current_password:sqPassword.value,security_question:sqSelect.value,security_answer:sqAnswer.value}});sqSave.disabled=false;
+  if(!r.ok){say(sqStatus,r.msg||"Could not save the security question.","error");return}
+  p.security_question=r.security_question;sqDraw();sqForm.reset();say(sqStatus,"Security question saved.","notice");toast("Security question saved.");
+ });
+ const questionCard=h("section",{class:"card profile-card","aria-labelledby":"profile-sq-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-sq-title"},"Security question"),h("p",null,"Used by Forgot password. Your answer is stored scrambled and never shown."))),sqCurrent,sqForm);
  const account=h("section",{class:"card profile-card","aria-labelledby":"profile-account-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-account-title"},"Account information"),h("p",null,"Your details. Your password hash is never shown."))),details);
  const editCard=h("section",{class:"card profile-card","aria-labelledby":"profile-edit-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-edit-title"},"Username"),h("p",null,"Pick the name shown in the workspace.")),editButton),edit);
  const securityCard=h("section",{class:"card profile-card","aria-labelledby":"profile-security-title"},h("div",{class:"profile-section-heading"},h("div",null,h("h2",{id:"profile-security-title"},"Security"),h("p",null,"Enter your current password to set a new one.")),passwordButton),passwordForm,status);
- root.append(head,account,editCard,securityCard);
+ root.append(welcome,head,photoCard,account,editCard,securityCard,questionCard);
  head.replaceChildren(h("div",{class:"boot"},h("div",{class:"spin"}),"Loading your profile…"));
  api("/api/profile").then(r=>{if(!r.profile){head.replaceChildren(h("div",{class:"callout error"},r.msg||"Could not load your profile."));return}p=r.profile;draw()});
  return root;
@@ -257,9 +291,9 @@ function renderProfilePage(){
 function passwordCriteriaForProfile(input){
  return[()=>input.value.length>=8,()=>/[A-Z]/.test(input.value),()=>/[a-z]/.test(input.value),()=>/[0-9]/.test(input.value),()=>/[!@#$%^&*(),.?":{}|<>~`_+=/\\[\];'-]/.test(input.value)];
 }
-function pickOutlet(username,role,outlets){
+function pickOutlet(username,role,outlets,def){
  return new Promise(resolve=>{
-  const sel=h("select",{class:"in","aria-label":"Outlet"},...outlets.map(x=>h("option",{value:x},x)));
+  const sel=h("select",{class:"in","aria-label":"Outlet"},...outlets.map(x=>h("option",{value:x},x)));if(def)sel.value=def;
   const done=v=>{ov.remove();document.removeEventListener("keydown",kd,true);resolve(v)};
   const kd=e=>{if(e.key==="Escape")done(null)};
   const ov=h("div",{class:"kpal",role:"dialog","aria-modal":"true","aria-label":"Choose an outlet",onclick:e=>{if(e.target===ov)done(null)}},
@@ -309,7 +343,7 @@ function renderAdminDashboard(){
  const roleCell=u=>{
   const me=data.me===u.id;const sel=h("select",{class:"in admin-role-select","aria-label":"Role of "+u.username,disabled:me,title:me?"You cannot change your own role.":""},...data.roles.map(r=>h("option",{value:r,selected:r===u.role},r)));
   sel.addEventListener("change",async()=>{
-   let o="";if(data.scoped_roles.includes(sel.value)){o=u.outlet||u.saved_outlet||"";if(!o){o=await pickOutlet(u.username,sel.value,data.outlets);if(!o){sel.value=u.role;return}}}
+   let o="";if(data.scoped_roles.includes(sel.value)){o=await pickOutlet(u.username,sel.value,data.outlets,u.outlet||u.saved_outlet||"");if(!o){sel.value=u.role;return}}
    const r=await act("/api/admin/users/"+u.id+"/role",{role:sel.value,outlet:o});if(!r.ok)sel.value=u.role;
   });return sel};
  const outletCell=u=>{
@@ -325,8 +359,8 @@ function renderAdminDashboard(){
  };
  const drawUsers=()=>{
   if(!data)return;const rows=data.users.filter(u=>!query||[u.email,u.username,u.role,u.outlet||""].join(" ").toLowerCase().includes(query)).map(u=>
-   h("tr",null,h("td",null,u.email),h("td",null,u.username+(data.me===u.id?" (you)":"")),h("td",null,roleCell(u)),h("td",null,outletCell(u)),
-    h("td",null,h("span",{class:"pill",style:"color:"+(u.locked?"#cd2b31":"#0b7a6c")+";border-color:currentColor"},u.locked?"Locked":"Active")),h("td",null,fmtTime(u.created_at)),h("td",null,fmtTime(u.last_login)),h("td",null,actionsCell(u))));
+   h("tr",null,h("td",null,u.email),h("td",null,h("span",{class:"who-cell"},avatarEl(u.picture,u.username,26),u.username+(data.me===u.id?" (you)":""))),h("td",null,roleCell(u)),h("td",null,outletCell(u)),
+    h("td",null,h("span",{class:"pill",style:"color:"+(u.locked?"#cd2b31":"#0b7a6c")+";border-color:currentColor"},u.locked?"Locked":"Active")),h("td",null,fmtShort(u.created_at)),h("td",null,fmtShort(u.last_login)),h("td",null,actionsCell(u))));
   userTable.replaceChildren(table(["Email","Username","Role","Outlet","Status","Created","Last login","Actions"],rows,query?"No users match your search.":"No users yet."));
  };
  const userTable=h("div",null);
@@ -468,9 +502,12 @@ function renderSignup(){
  api("/api/auth/options").then(o=>{
   if(!o.roles){status.className="signup-status is-error";status.textContent=o.msg||"Could not load the role list. Refresh the page.";return}
   scoped=o.scoped_roles||[];
+  question.replaceChildren(h("option",{value:""},"Choose a security question"),...(o.questions||[]).map(x=>h("option",{value:x},x)));
   role.replaceChildren(h("option",{value:""},"Choose your role"),...o.roles.map(r=>h("option",{value:r},r)));
   outlet.replaceChildren(h("option",{value:""},"Choose your outlet"),...o.outlets.map(x=>h("option",{value:x},x)));syncOutlet();
  });
+ const question=h("select",{id:"signup-question",name:"security_question",required:true},h("option",{value:""},"Loading questions…"));
+ const sqAnswer=h("input",{id:"signup-answer",name:"security_answer",type:"text",autocomplete:"off",autocapitalize:"none",spellcheck:"false",required:true,minlength:"2",maxlength:"100"});
  const password=h("input",{id:"signup-password",name:"password",type:"password",autocomplete:"new-password",minlength:"8",required:true,"aria-describedby":"signup-strength signup-guidance"});
  const confirm=h("input",{id:"signup-confirm",name:"confirm-password",type:"password",autocomplete:"new-password",minlength:"8",required:true});
  const strengthText=h("span",{class:"strength-label","aria-hidden":"true"},"Enter a password");
@@ -490,8 +527,10 @@ function renderSignup(){
   if(!role.value){validationMessage("Choose your role.");role.focus();return}
   if(criteria.map(test=>test()).some(ok=>!ok)){validationMessage("Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.");password.focus();return}
   if(password.value!==confirm.value){confirm.setCustomValidity("Passwords do not match.");confirm.reportValidity();validationMessage("The passwords do not match.");confirm.focus();return}
+  if(!question.value){validationMessage("Choose a security question.");question.focus();return}
+  if(sqAnswer.value.trim().length<2){validationMessage("Enter a security answer of at least 2 characters.");sqAnswer.focus();return}
   submit.setLoading(true);
-  const r=await api("/api/auth/signup",{json:{email:email.value.trim(),username:username.value.trim(),password:password.value,confirm_password:confirm.value,role:role.value,outlet:outlet.value}});
+  const r=await api("/api/auth/signup",{json:{email:email.value.trim(),username:username.value.trim(),password:password.value,confirm_password:confirm.value,role:role.value,outlet:outlet.value,security_question:question.value,security_answer:sqAnswer.value}});
   submit.setLoading(false);
   if(r.ok){S.loginNotice="Account created. Sign in with your new account.";S.authScreen="login";renderLogin();return}
   validationMessage(r.msg||"Could not create the account.");
@@ -508,6 +547,8 @@ function renderSignup(){
    meter,
    h("p",{id:"signup-guidance",class:"password-guidance"},"Aim for 8+ characters with uppercase and lowercase letters, a number, and a symbol.")),
   h("div",{class:"fld"},h("label",{for:"signup-confirm"},"Confirm password"),h("div",{class:"password-field"},confirm,toggleConfirm)),
+  h("div",{class:"fld"},h("label",{for:"signup-question"},"Security question"),question),
+  h("div",{class:"fld"},h("label",{for:"signup-answer"},"Your answer"),sqAnswer,h("p",{class:"password-guidance"},"Used to recover your password if you forget it. Capital letters do not matter.")),
   submit.button,
   status,
   h("p",{class:"signup-prompt"},"Already have an account? ",h("a",{href:"#login",onclick:backToLogin},"Return to login")));
@@ -517,30 +558,38 @@ function renderForgotPassword(){
  clearInterval(S.otpCountdown);S.otpCountdown=null;
  const app=$("#app");app.classList.add("auth-shell");S.authScreen="forgot";
  const status=h("p",{class:"auth-feedback","role":"status","aria-live":"polite"});
- const email=h("input",{id:"recovery-email",name:"email",type:"email",autocomplete:"email",autocapitalize:"none",spellcheck:"false",required:true,value:S.recoveryEmail});
- const submit=authSubmitButton("Send code","Sending...");
+ const email=h("input",{id:"recovery-email",name:"email",type:"text",autocomplete:"username",autocapitalize:"none",spellcheck:"false",required:true,value:S.recoveryEmail});
+ const submit=authSubmitButton("Send me a code by e-mail","Sending...");
  const onSubmit=async event=>{
   event.preventDefault();status.className="auth-feedback";status.textContent="";
-  email.setCustomValidity(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())?"":"Enter a valid email address.");
-  if(!event.currentTarget.reportValidity()){status.classList.add("is-error");status.textContent="Please enter a valid email address.";return}
+  email.setCustomValidity(email.value.trim()?"":"Enter your email or username.");
+  if(!event.currentTarget.reportValidity()){status.classList.add("is-error");status.textContent="Enter your email or username.";return}
   S.recoveryEmail=email.value.trim();submit.setLoading(true);
   const r=await api("/api/auth/forgot",{json:{email:S.recoveryEmail}});submit.setLoading(false);
   if(!r.ok){status.classList.add("is-error");status.textContent=r.msg||"Could not send the code.";return}
-  S.recoveryOtp="";S.otpResendUntil=Date.now()+30000;S.otpNotice=r.msg;S.authScreen="otp";renderOtpVerification();
+  S.recoveryOtp="";S.otpResendUntil=Date.now()+60000;S.otpNotice=r.msg;S.authScreen="otp";renderOtpVerification();
  };
  const back=event=>{event.preventDefault();S.authScreen="login";renderLogin()};
+ const viaQuestion=h("button",{class:"btn login-submit",type:"button",onclick:async()=>{
+  status.className="auth-feedback";status.textContent="";
+  email.setCustomValidity(email.value.trim()?"":"Enter your email or username.");
+  if(!email.reportValidity()){status.classList.add("is-error");status.textContent="Enter your email or username.";return}
+  S.recoveryEmail=email.value.trim();viaQuestion.disabled=true;const r=await api("/api/auth/security-question",{json:{email:S.recoveryEmail}});viaQuestion.disabled=false;
+  if(!r.ok){status.classList.add("is-error");status.textContent=r.msg||"Could not load the question.";return}
+  S.recoveryQuestion=r.question;S.authScreen="answer";renderSecurityAnswer();
+ }},"Answer my security question");
  email.addEventListener("input",()=>{email.setCustomValidity("");S.recoveryEmail=email.value});
  const form=h("form",{class:"auth auth-form recovery-form",novalidate:true,onsubmit:onSubmit},
-  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Forgot your password?"),h("p",null,"Enter your account email and we will send you a 6-digit verification code.")),
-  h("div",{class:"fld"},h("label",{for:"recovery-email"},"Email address"),email),
-  submit.button,status,
+  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Forgot your password?"),h("p",null,"Enter your email or username, then choose how to prove it is you: a 6-digit code by e-mail, or your security question.")),
+  h("div",{class:"fld"},h("label",{for:"recovery-email"},"Email or username"),email),
+  submit.button,viaQuestion,status,
   h("p",{class:"signup-prompt"},h("a",{href:"#login",onclick:back},"Back to login")));
  app.replaceChildren(authShell(form,"Recover your FranchiseOps AI account"));
 }
 function renderOtpVerification(){
  clearInterval(S.otpCountdown);S.otpCountdown=null;
  const app=$("#app");app.classList.add("auth-shell");S.authScreen="otp";
- if(!S.otpResendUntil)S.otpResendUntil=Date.now()+30000;
+ if(!S.otpResendUntil)S.otpResendUntil=Date.now()+60000;
  const status=h("p",{class:"auth-feedback","role":"status","aria-live":"polite"});
  if(S.otpNotice){status.classList.add("is-notice");status.textContent=S.otpNotice;S.otpNotice=""}
  const emailText=h("b",null,S.recoveryEmail||"your email");
@@ -548,7 +597,7 @@ function renderOtpVerification(){
  const resend=h("button",{class:"btn otp-resend",type:"button",disabled:true,onclick:async()=>{
   resend.disabled=true;const r=await api("/api/auth/forgot",{json:{email:S.recoveryEmail}});
   status.className="auth-feedback "+(r.ok?"is-notice":"is-error");status.textContent=r.msg||"Could not resend the code.";
-  S.otpResendUntil=Date.now()+30000;if(!S.otpCountdown)S.otpCountdown=setInterval(updateCountdown,1000);updateCountdown();
+  S.otpResendUntil=Date.now()+60000;if(!S.otpCountdown)S.otpCountdown=setInterval(updateCountdown,1000);updateCountdown();
  }},"Resend code");
  const countdown=h("span",{id:"otp-countdown",class:"otp-countdown","aria-live":"off"});
  const submit=authSubmitButton("Verify code","Verifying...");
@@ -576,7 +625,7 @@ function renderOtpVerification(){
  const back=event=>{event.preventDefault();S.recoveryOtp=code.value;S.authScreen="forgot";renderForgotPassword()};
  const form=h("form",{class:"auth auth-form recovery-form otp-form",novalidate:true,onsubmit:onSubmit},
   h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Verify your email"),h("p",null,"Enter the six-digit verification code sent to ",emailText,".")),
-  h("div",{class:"fld"},h("label",{for:"recovery-otp"},"Six-digit verification code"),code,h("p",{id:"otp-guidance",class:"password-guidance"},"The code is valid for 10 minutes. Five wrong codes cancel it.")),
+  h("div",{class:"fld"},h("label",{for:"recovery-otp"},"Six-digit verification code"),code,h("p",{id:"otp-guidance",class:"password-guidance"},"The code is valid for 5 minutes and works once. Three wrong codes pause recovery for 15 minutes.")),
   h("div",{class:"otp-resend-row"},resend,countdown),
   submit.button,status,
   h("p",{class:"signup-prompt"},h("a",{href:"#forgot-password",onclick:back},"Back to email")));
@@ -615,15 +664,51 @@ function renderResetPassword(){
   h("p",{class:"signup-prompt"},h("a",{href:"#login",onclick:back},"Back to login")));
  app.replaceChildren(authShell(form,"Reset your FranchiseOps AI password"));
 }
+function renderSecurityAnswer(){
+ clearInterval(S.otpCountdown);S.otpCountdown=null;
+ const app=$("#app");app.classList.add("auth-shell");S.authScreen="answer";
+ const status=h("p",{class:"auth-feedback","role":"status","aria-live":"polite"});
+ const answer=h("input",{id:"recovery-answer",name:"answer",type:"text",autocomplete:"off",autocapitalize:"none",spellcheck:"false",required:true,maxlength:"100"});
+ const password=h("input",{id:"reset-password",name:"password",type:"password",autocomplete:"new-password",minlength:"8",required:true,"aria-describedby":"reset-strength reset-guidance"});
+ const confirm=h("input",{id:"reset-confirm",name:"confirm-password",type:"password",autocomplete:"new-password",minlength:"8",required:true});
+ const strengthText=h("span",{class:"strength-label","aria-hidden":"true"},"Enter a password"),strengthFill=h("span",{class:"strength-fill"});
+ const meter=h("div",{id:"reset-strength",class:"strength-meter","role":"progressbar","aria-label":"New password strength estimate","aria-valuemin":"0","aria-valuemax":"5","aria-valuenow":"0","aria-valuetext":"Enter a password"},h("span",{class:"strength-track"},strengthFill),strengthText);
+ const criteria=passwordCriteria(password),submit=authSubmitButton("Reset password","Resetting...");
+ const updateStrength=()=>updatePasswordStrength(password,meter,strengthFill,strengthText,criteria);
+ password.addEventListener("input",()=>{password.setCustomValidity("");updateStrength()});
+ confirm.addEventListener("input",()=>confirm.setCustomValidity(""));
+ const onSubmit=async event=>{
+  event.preventDefault();status.className="auth-feedback";status.textContent="";
+  if(!event.currentTarget.reportValidity()){status.classList.add("is-error");status.textContent="Please check the highlighted fields.";return}
+  if(criteria.some(test=>!test())){status.classList.add("is-error");status.textContent="Choose a password with at least 8 characters, uppercase and lowercase letters, a number, and a symbol.";password.focus();return}
+  if(password.value!==confirm.value){confirm.setCustomValidity("Passwords do not match.");confirm.reportValidity();status.classList.add("is-error");status.textContent="The passwords do not match.";confirm.focus();return}
+  submit.setLoading(true);const r=await api("/api/auth/reset-with-answer",{json:{email:S.recoveryEmail,answer:answer.value,password:password.value,confirm_password:confirm.value}});submit.setLoading(false);
+  if(!r.ok){status.classList.add("is-error");status.textContent=r.msg||"Could not reset the password.";answer.focus();return}
+  S.recoveryEmail="";S.recoveryQuestion="";S.loginNotice=r.msg;S.authScreen="login";renderLogin();
+ };
+ const back=event=>{event.preventDefault();S.authScreen="forgot";renderForgotPassword()};
+ const useCode=async event=>{event.preventDefault();const r=await api("/api/auth/forgot",{json:{email:S.recoveryEmail}});if(!r.ok){status.classList.add("is-error");status.textContent=r.msg||"Could not send the code.";return}S.recoveryOtp="";S.otpResendUntil=Date.now()+60000;S.otpNotice=r.msg;S.authScreen="otp";renderOtpVerification()};
+ const form=h("form",{class:"auth auth-form recovery-form",novalidate:true,onsubmit:onSubmit},
+  h("div",{class:"auth-heading"},h("span",{class:"auth-kicker"},"ACCOUNT RECOVERY"),h("h1",null,"Answer your security question"),h("p",null,"Answer it, then choose a new password for ",h("b",null,S.recoveryEmail||"your account"),".")),
+  h("div",{class:"auth-info",role:"note"},h("b",null,S.recoveryQuestion||"Your security question")),
+  h("div",{class:"fld"},h("label",{for:"recovery-answer"},"Your answer"),answer,h("p",{class:"password-guidance"},"Capital letters and extra spaces do not matter. Three wrong answers pause this option for 15 minutes.")),
+  h("div",{class:"fld"},h("label",{for:"reset-password"},"New password"),h("div",{class:"password-field"},password,passwordToggle(password)),
+   meter,h("p",{id:"reset-guidance",class:"password-guidance"},"Use at least 8 characters with uppercase and lowercase letters, a number, and a symbol.")),
+  h("div",{class:"fld"},h("label",{for:"reset-confirm"},"Confirm new password"),h("div",{class:"password-field"},confirm,passwordToggle(confirm))),
+  submit.button,status,
+  h("p",{class:"auth-secondary-link"},"No question set up, or forgot the answer? ",h("a",{href:"#otp",onclick:useCode},"Send me a code by e-mail instead")),
+  h("p",{class:"signup-prompt"},h("a",{href:"#forgot-password",onclick:back},"Back"),"  ·  ",h("a",{href:"#login",onclick:event=>{event.preventDefault();S.authScreen="login";renderLogin()}},"Back to login")));
+ app.replaceChildren(authShell(form,"Answer your security question"));
+}
 async function render(){const app=$("#app");if(S.es){S.es.close();S.es=null}
  if(!S.me)app.replaceChildren(h("div",{class:"boot",role:"status"},h("div",{class:"spin","aria-hidden":"true"}),"Connecting to FranchiseOps AI…"));
  const pub=await api("/api/public");S.pub=pub;S.apiNotice=pub.error&&pub.status!==401?pub.msg:"";
  if(!S.me&&authToken()){const m=await api("/api/me");if(m.user){S.me=m;S.apiNotice=""}else if(m.error&&m.status!==401&&!S.apiNotice)S.apiNotice=m.msg}
- if(!S.me){if(S.authScreen==="signup")renderSignup();else if(S.authScreen==="forgot")renderForgotPassword();else if(S.authScreen==="otp")renderOtpVerification();else if(S.authScreen==="reset")renderResetPassword();else renderLogin();return}
+ if(!S.me){if(S.authScreen==="signup")renderSignup();else if(S.authScreen==="forgot")renderForgotPassword();else if(S.authScreen==="otp")renderOtpVerification();else if(S.authScreen==="answer")renderSecurityAnswer();else if(S.authScreen==="reset")renderResetPassword();else renderLogin();return}
  if(Array.isArray(S.me.menu)&&!S.me.menu.some(m=>m.id==="profile"))S.me.menu=[...S.me.menu,{id:"profile",label:"My Profile",icon:"user"}];
  if(Array.isArray(S.me.menu)&&!S.me.menu.some(m=>m.id==="admin")&&String(S.me.user.role||"").toLowerCase()==="admin")S.me.menu=[...S.me.menu,{id:"admin",label:"Admin Dashboard",icon:"shield"}];
  app.classList.remove("auth-shell");
- app.replaceChildren(h("div",{class:"side"},h("div",{class:"brand"},h("i",null,icon("radar")),h("div",null,S.me.name,h("small",null,S.me.user.role+" · "+S.me.user.email))),h("div",{class:"ksearch",onclick:()=>UI.palette()},"Search or ask…",h("kbd",null,"Ctrl K")),h("div",{id:"nav"}),h("div",{class:"sp"}),h("div",{class:"sidefoot"},h("div",{class:"who"},h("b",null,S.me.user.username||S.me.user.email),h("small",null,S.me.user.role+(S.me.scope?" · "+S.me.scope:""))),h("button",{class:"btn sm signout",type:"button",onclick:()=>UI.signOut()},"Sign out"))),
+ app.replaceChildren(h("div",{class:"side"},h("div",{class:"brand"},h("i",null,icon("radar")),h("div",null,S.me.name,h("small",null,S.me.user.role+" · "+S.me.user.email))),h("div",{class:"ksearch",onclick:()=>UI.palette()},"Search or ask…",h("kbd",null,"Ctrl K")),h("div",{id:"nav"}),h("div",{class:"sp"}),h("div",{class:"sidefoot"},h("span",{class:"av-slot"},avatarEl(S.me.user.picture,S.me.user.username||S.me.user.email,34)),h("div",{class:"who"},h("b",null,S.me.user.username||S.me.user.email),h("small",null,S.me.user.role+(S.me.scope?" · "+S.me.scope:""))),h("button",{class:"btn sm signout",type:"button",onclick:()=>UI.signOut()},"Sign out"))),
   h("div",{class:"main"},h("div",{id:"warn",class:"warnbar",style:"display:none"},"No CUDA GPU detected: models run on CPU and will be slow. In Colab choose Runtime → Change runtime type → T4 GPU, then restart."),
    h("div",{class:"top"},h("div",null,h("h1",{id:"ttl"}),h("div",{class:"sub",id:"sub"})),h("div",{class:"sp"}),h("div",{id:"acts",style:"display:flex;gap:8px"}),themeToggle(),h("span",{class:"chip",id:"hl"},"connecting…"),h("span",{class:"chip",id:"gpu"})),
    h("div",{class:"content"},h("div",{class:"tabs",id:"tabs"}),h("div",{id:"pg"},h("div",{class:"blocks",id:"blocks"})))));

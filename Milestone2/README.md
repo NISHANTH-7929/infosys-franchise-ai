@@ -11,8 +11,18 @@ Infosys Springboard Internship 7.0, Batch 4. **Milestone 2 turns the single-oper
 | Access control | [`app/rbac.py`](app/rbac.py), [`docs/RBAC.md`](docs/RBAC.md) |
 | Login, users, admin API | [`app/accounts.py`](app/accounts.py) |
 | Copilot question patterns | [`app/intents.py`](app/intents.py) |
-| Tests | [`tests/`](tests): 243 tests |
+| Tests | [`tests/`](tests): 266 tests |
 | Screenshots | [`screenshots/`](screenshots) |
+
+## Team
+
+| Member | Area | What this area delivers in the final product |
+|---|---|---|
+| **Nishanth** | RBAC | The five roles and the page access matrix, **server-side 403** on every page and action, and the one-outlet scope for Store Manager and Staff (`app/rbac.py`). Also integrated the parts into one application, wrote the automated tests and the notebook build, and the documentation. |
+| **Akshay** | UI / UX | The redesigned interface: login, sign-up, recovery, profile and admin screens, light and dark themes, phone layout, loading and error states (`app/static/`). |
+| **Sidhesh** | Auth and security | Sign-up, login, JWT sessions, bcrypt password hashing, lock after 5 wrong passwords, and password recovery by e-mail code and by security question (`app/accounts.py`). |
+| **Sujitha** | Admin dashboard and profile | The Admin Dashboard (users table, add, delete with confirmation, promote and demote, lock and unlock, activity log, KPI cards, privilege table) and the Profile page (details, photo, change username and password, security question). |
+| **Varsha** | Copilot fine-tuning and agents | The Copilot's 23 SQL question patterns with spelling tolerance, the SQL and row count under every answer, the polite fallback with three valid questions, and the six agent pages (`app/intents.py`). |
 
 ---
 
@@ -51,7 +61,7 @@ Open http://localhost:8000.
 
 ## 2. Login, sign-up and recovery (Milestone 1, now in FastAPI)
 
-Routes: `POST /api/auth/signup`, `/login`, `/forgot`, `/verify`, `/reset`, `/logout` and `GET /api/auth/options`.
+Routes: `POST /api/auth/signup`, `/login`, `/forgot`, `/verify`, `/reset`, `/security-question`, `/reset-with-answer`, `/logout` and `GET /api/auth/options`.
 
 | Rule | How it works |
 |---|---|
@@ -63,11 +73,29 @@ Routes: `POST /api/auth/signup`, `/login`, `/forgot`, `/verify`, `/reset`, `/log
 | Lockout | **5 wrong passwords lock the account.** Only an Admin can unlock it, and a password reset never unlocks it. The last active Admin is never auto-locked. |
 | Email rule | At least 2 letters before `@`, 2 between `@` and the dot, 2 after it (from Milestone 1). |
 | Password rule | At least 8 characters with an upper-case letter, a lower-case letter, a number and a special character; the two fields must match. |
-| Recovery | *Forgot password* sends a **6-digit code** valid for 10 minutes. 5 wrong codes cancel it, a new one can be requested after 30 seconds, and the code works once. Changing a password signs out the other sessions. |
+| Recovery (two ways) | On *Forgot password* enter your **e-mail or username**, then either **(1)** get a **6-digit code by e-mail** (valid 5 minutes, works once, a new one after 60 seconds) or **(2)** **answer your security question**. **3 wrong codes (or 3 wrong answers) pause that route for 15 minutes.** Changing a password signs out the other sessions. |
+| Locked accounts | A locked account **cannot** get a code, see its question or reset a password: the recovery screens stop with "This account is locked. Contact an administrator." |
+| Security question | Chosen at sign-up from the Milestone 1 list of five, with an answer that is stored scrambled (bcrypt) and never shown. Capital letters and extra spaces do not matter. An Admin-created account sets its question in the Profile page. |
+| Formatted e-mail | The code arrives in a branded HTML e-mail (large digit boxes, expiry, a "did not ask for this?" note) with a plain-text version. |
 
 ### Role is chosen at sign-up, Admin is not
 
-The sign-up page asks for **your role**: Franchise Owner, Store Manager, Staff or Auditor. A Store Manager or Staff member also picks their **outlet**. **Admin is not offered and the server refuses it**: only an Admin can promote someone to Admin. Anyone can be promoted or demoted later in the Admin Dashboard.
+The sign-up page asks for **your role**: Franchise Owner, Store Manager, Staff or Auditor, plus a **security question and answer**. A Store Manager or Staff member also picks their **outlet**. **Admin is not offered and the server refuses it**: only an Admin can promote someone to Admin. Anyone can be promoted or demoted later in the Admin Dashboard.
+
+### Milestone 1 features carried over
+
+| Milestone 1 feature | In Milestone 2 |
+|---|---|
+| Direct registration with username, e-mail, password, confirm password, security question and answer | Sign-up page (plus role and outlet) |
+| Sign in with **username or e-mail**; generic error messages | Login page |
+| JWT session; secure sign-out | Bearer token; **Sign out** button |
+| Forgot password, two routes: security question and e-mail code (look-up by username or e-mail) | Forgot-password screens |
+| 3 wrong codes pause recovery for 15 minutes; code lives 5 minutes; 60 second resend | Same limits |
+| Strict validation: no empty fields, e-mail rule (2 + 2 + 2), password rule, confirmation | Same rules, on the page and on the server |
+| User dashboard: welcome banner, profile details, registration date, active session status | **Profile page** (welcome banner, session expiry, joined date) |
+| Admin console listing users, never showing hashes | **Admin Dashboard**, now with full user management |
+| Secrets only in Colab Secrets; salted bcrypt hashes | Same |
+| Automated tests | `tests/` |
 
 ---
 
@@ -105,16 +133,19 @@ Team decisions you can change in `rbac.py`: the Franchise Owner sees all outlets
 
 ## 4. Profile page
 
-Shows username, e-mail, role, outlet, joined date and last login (never the password hash). The user can **change the username** and **change the password**: the current password is asked first and the Milestone 1 password rules apply.
+* **Welcome banner** with your role, outlet, member-since date and the **session status** (when your login expires, in IST).
+* **Profile photo** for every role, Admin included: upload a PNG, JPEG or WebP; it is cropped to a small square, checked on the server (real image, size limit) and shown in the sidebar and in the Admin's user table. Remove it any time.
+* Username, e-mail, role, outlet, joined date and last login (never the password hash).
+* **Change username**, **change password** (the current password is asked first and the Milestone 1 password rules apply), and **set or change your security question**.
 
 ## 5. Admin Dashboard
 
 Only the Admin role can open it, and every route behind it needs the `users` capability.
 
 * **KPI cards:** total users, active users, locked users, roles in use; plus **users per role**.
-* **Users table:** e-mail, username, role, outlet, status (Active / Locked), created, last login. Search box.
+* **Users table:** e-mail, username, role, outlet, status (Active / Locked), created, last login (all times in **IST**). Search box and each person's photo.
 * **Add user:** e-mail, username, temporary password, role (and outlet for one-outlet roles). The sign-up rules apply.
-* **Promote / demote:** a role drop-down per user. The change is effective on the person's very next request.
+* **Promote / demote:** a role drop-down per user. **Choosing a one-outlet role (Store Manager or Staff) always asks which outlet.** The change is effective on the person's very next request.
 * **Lock / unlock:** a locked user cannot sign in and their existing token stops working immediately.
 * **Delete** with a confirmation step.
 * **Protections:** an Admin cannot delete, lock or change the role of **their own** account, and **the last Admin can never be removed**, locked or demoted.
@@ -190,7 +221,7 @@ The numbers come from the generated demo data and change with every fresh run.
 
 ## 7. Design (Step 8)
 
-A consistent **midnight navy and teal** colour theme in light mode (navy sidebar, white cards on cool slate, teal accents, amber for warnings), readable tables, responsive layout (a phone gets a bottom navigation bar), a **dark-mode switch**, loading states, and clear error messages (for example **"Access denied (403)"**). Designed login, sign-up, recovery, profile and admin pages.
+Every time on screen is shown in **Indian Standard Time (IST)**. A consistent **midnight navy and teal** colour theme in light mode (navy sidebar, white cards on cool slate, teal accents, amber for warnings), readable tables, responsive layout (a phone gets a bottom navigation bar), a **dark-mode switch**, loading states, and clear error messages (for example **"Access denied (403)"**). Designed login, sign-up, recovery, profile and admin pages.
 
 ---
 
@@ -201,12 +232,12 @@ pip install fastapi pandas numpy scikit-learn scipy vaderSentiment httpx python-
 python -m pytest Milestone2/tests -v
 ```
 
-**243 tests**, all passing:
+**266 tests**, all passing:
 
 | File | Covers |
 |---|---|
 | `test_rbac.py` | Every role against every page and action, allowed and denied (403). The expected matrix is **copied from the instructions**, not imported from `rbac.py`. Outlet scope, Copilot leak checks, unknown role, metrics endpoint. |
-| `test_accounts.py` | **Real accounts, no simulated users:** sign-up validation, no Admin sign-up, login, same error, 5-attempt lock, immediate effect of a lock, recovery code, profile, every Admin action, last-Admin protection, activity log. |
+| `test_accounts.py` | **Real accounts, no simulated users:** sign-up validation (including the security question), no Admin sign-up, login, same error, 5-attempt lock, immediate effect of a lock, both recovery routes (look-up by username or e-mail, 3-try pause, locked accounts refused, unknown accounts indistinguishable), the formatted e-mail, profile and profile photo, IST time stamps, every Admin action, last-Admin protection, activity log. |
 | `test_copilot.py` | Each of the 23 patterns, answers checked against independent queries, spelling and wording, SQL and row count, polite fallback with three answerable suggestions, scope and PII masking. |
 
 To test by hand with real accounts: create one account per role on the sign-up page, sign in as each, open each page and try each action, and compare with the table in section 3.
@@ -222,7 +253,15 @@ All taken from the running application, signed in as the role named.
 | **Login** ![Login](screenshots/01_login_page.png) | **Sign-up (role and outlet)** ![Sign-up](screenshots/02_signup_page.png) |
 | **Forgot password: enter the code** ![Code](screenshots/21_forgot_password_code.png) | **Account locked after 5 wrong passwords** ![Locked](screenshots/22_account_locked.png) |
 
-**Profile page**
+**Forgot password by security question**
+
+![Security question](screenshots/21b_security_question_recovery.png)
+
+**A locked account cannot start recovery: it is told so and never reaches the code or answer screen**
+
+![Locked recovery](screenshots/22b_locked_account_recovery_blocked.png)
+
+**Profile page: welcome banner with session status, profile photo, security question**
 
 ![Profile](screenshots/03_profile_page.png)
 
@@ -279,22 +318,3 @@ All taken from the running application, signed in as the role named.
 | | |
 |---|---|
 | ![Dark](screenshots/15_dark_mode.png) | ![Phone](screenshots/17_phone_layout.png) |
-
----
-
-## 10. Final checklist
-
-| ✓ | Item | Where |
-|---|---|---|
-| ✓ | Application runs in Colab with the Colab link (ngrok as fallback) | Section 1, notebook last cell |
-| ✓ | Milestone 1 login, sign-up and forgot password work in FastAPI | Section 2, `accounts.py` |
-| ✓ | Passwords hashed, JWT used, secrets only in Colab Secrets | Sections 1 and 2; no secret in the repository |
-| ✓ | Profile page works (username and password change) | Section 4 |
-| ✓ | Five roles created with the privilege table | Section 3, `rbac.py` |
-| ✓ | Server returns 403 for pages and actions outside the role | Section 3, `test_rbac.py` |
-| ✓ | Admin dashboard: add, delete, promote, lock and unlock users | Section 5 |
-| ✓ | Locked users are blocked immediately; the last Admin is protected | Sections 2 and 5, `test_accounts.py` |
-| ✓ | At least 15 new Copilot questions, all answered from SQL | Section 6 (23 patterns) |
-| ✓ | Design improved on every page | Section 7 |
-| ✓ | Notebook outputs cleared and no secrets in GitHub | The notebook has no outputs; `.gitignore` excludes `.db`, `.env` and tokens |
-| ✓ | README and screenshots in the `Milestone2` folder | This file and `screenshots/` |
