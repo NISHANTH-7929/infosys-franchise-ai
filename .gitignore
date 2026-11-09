@@ -40,3 +40,9 @@ Thumbs.db
 
 # Pytest cache
 .pytest_cache/
+
+# Milestone 3: never commit secrets or databases
+*.pem
+*.key
+secrets.*
+Milestone3/**/*.db
