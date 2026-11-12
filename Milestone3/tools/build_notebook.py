@@ -145,7 +145,7 @@ def build():
     cells = [md(INTRO),
              code("!nvidia-smi -L || echo 'NO GPU: choose Runtime > Change runtime type > T4 GPU'"),
              code("!pip -q install fastapi 'uvicorn[standard]' python-multipart pyjwt bcrypt pandas numpy scikit-learn scipy vaderSentiment pdfplumber reportlab langgraph langdetect requests httpx transformers accelerate bitsandbytes sentence-transformers sentencepiece hf_transfer matplotlib huggingface_hub pyngrok\n!pip -q install prophet 2>/dev/null || echo 'prophet not installed (trend forecast will be used)'"),
-             code("import os\nos.makedirs('/content/app/static', exist_ok=True)\nos.chdir('/content/app')"),
+             code("import os\n" + "".join(f"os.makedirs('/content/app/{d}', exist_ok=True)\n" for d in sorted({os.path.dirname(r) for r in project_files()} | {'static'}) if d) + "os.makedirs('/content/app', exist_ok=True)\nos.chdir('/content/app')"),
              code(SECRETS)]
     for rel in project_files():
         with open(os.path.join(APP, rel), encoding="utf-8", newline="") as f: body = f.read().replace("\r\n", "\n")
